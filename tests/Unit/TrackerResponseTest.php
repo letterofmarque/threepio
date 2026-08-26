@@ -140,14 +140,14 @@ describe('TrackerResponse', function () {
 
     describe('error', function () {
         it('creates valid error response', function () {
-            $response = TrackerResponse::error('Invalid passkey');
+            $response = TrackerResponse::error('Invalid announce key');
 
             expect($response->getStatusCode())->toBe(200);
 
             $decoded = Bencode::decode($response->getContent());
 
             expect($decoded)->toHaveKey('failure reason');
-            expect($decoded['failure reason'])->toBe('Invalid passkey');
+            expect($decoded['failure reason'])->toBe('Invalid announce key');
         });
 
         it('sets no-cache headers', function () {
