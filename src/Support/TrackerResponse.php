@@ -14,7 +14,7 @@ final class TrackerResponse
     /**
      * Create a successful announce response.
      *
-     * @param array<array{ip: string, port: int, peer_id?: string}> $peers
+     * @param  array<array{ip: string, port: int, peer_id?: string}>  $peers
      */
     public static function announce(
         array $peers,
@@ -43,7 +43,7 @@ final class TrackerResponse
     /**
      * Create a scrape response.
      *
-     * @param array<string, array{complete: int, downloaded: int, incomplete: int}> $files
+     * @param  array<string, array{complete: int, downloaded: int, incomplete: int}>  $files
      */
     public static function scrape(array $files): Response
     {
@@ -75,7 +75,7 @@ final class TrackerResponse
     /**
      * Create a bencoded HTTP response.
      *
-     * @param array<string, mixed> $data
+     * @param  array<string, mixed>  $data
      */
     private static function bencodedResponse(array $data): Response
     {
@@ -92,7 +92,7 @@ final class TrackerResponse
     /**
      * Build compact peer string (6 bytes per peer: 4 for IP, 2 for port).
      *
-     * @param array<array{ip: string, port: int}> $peers
+     * @param  array<array{ip: string, port: int}>  $peers
      */
     private static function compactPeers(array $peers): string
     {
@@ -114,7 +114,7 @@ final class TrackerResponse
     /**
      * Build dictionary peer list (for older clients).
      *
-     * @param array<array{ip: string, port: int, peer_id?: string}> $peers
+     * @param  array<array{ip: string, port: int, peer_id?: string}>  $peers
      * @return array<int, array{ip: string, port: int, peer id?: string}>
      */
     private static function dictionaryPeers(array $peers): array

@@ -62,7 +62,7 @@ final class Bencode
     /**
      * Encode a list (sequential array).
      *
-     * @param array<int, mixed> $value
+     * @param  array<int, mixed>  $value
      */
     private static function encodeList(array $value): string
     {
@@ -79,7 +79,7 @@ final class Bencode
      * Encode a dictionary (associative array).
      * Keys must be sorted alphabetically per the spec.
      *
-     * @param array<string, mixed> $value
+     * @param  array<string, mixed>  $value
      */
     private static function encodeDict(array $value): string
     {

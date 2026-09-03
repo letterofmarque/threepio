@@ -70,7 +70,7 @@ describe('Bencode', function () {
         })->throws(InvalidArgumentException::class);
 
         it('throws on objects', function () {
-            Bencode::encode(new stdClass());
+            Bencode::encode(new stdClass);
         })->throws(InvalidArgumentException::class);
     });
 

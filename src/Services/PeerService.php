@@ -25,10 +25,42 @@ final class PeerService
 
     private int $peerExpiry;
 
+    /**
+     * Recovers a peer's last known cumulative counters when Redis has lost them.
+     *
+     * Redis holds the baseline that deltas are diffed against. If it restarts,
+     * that baseline is gone and the next announce has nothing to compare to —
+     * so it credits zero, silently, and whatever the peer transferred across
+     * the gap is lost with no way to detect it.
+     *
+     * A tracker that keeps a durable record of announces can recover the
+     * baseline from it. Threepio has no such record and cannot depend on the
+     * package that does (bloodhound depends on threepio, never the reverse),
+     * so this is a seam rather than a lookup: a private tracker supplies a
+     * resolver, a public one leaves it null and keeps today's behaviour.
+     *
+     * @var null|callable(int, string): (array{uploaded: int, downloaded: int}|null)
+     */
+    private $baselineResolver = null;
+
     public function __construct()
     {
         $this->prefix = config('threepio.redis.prefix', 'marque:');
         $this->peerExpiry = (int) config('threepio.peer_expiry', 3600);
+    }
+
+    /**
+     * Supply a durable fallback for a peer's cumulative counters.
+     *
+     * Called only when Redis has no record of the peer. Return null when the
+     * peer genuinely has no history — a first announce has no baseline, and
+     * inventing one would be worse than admitting there isn't one.
+     *
+     * @param  callable(int, string): (array{uploaded: int, downloaded: int}|null)  $resolver
+     */
+    public function resolveBaselineUsing(callable $resolver): void
+    {
+        $this->baselineResolver = $resolver;
     }
 
     /**
@@ -58,6 +90,18 @@ final class PeerService
         $peerKey = $this->prefix."peers:{$torrentId}";
         $existingPeer = $this->getPeer($torrentId, $peerId);
 
+        // Redis knows nothing about this peer. That is either a genuinely new
+        // peer, or a peer whose state Redis lost — and the two are
+        // indistinguishable from here. Ask the durable record which it is
+        // before assuming there is no baseline, because assuming wrongly
+        // means silently crediting zero for everything transferred since the
+        // peer's last announce.
+        $recoveredBaseline = null;
+
+        if ($existingPeer === null && $this->baselineResolver !== null) {
+            $recoveredBaseline = ($this->baselineResolver)($torrentId, $peerId);
+        }
+
         $peerData = [
             'peer_id' => $peerId,
             'user_id' => $userId,
@@ -72,14 +116,23 @@ final class PeerService
             'started' => $existingPeer['started'] ?? time(),
         ];
 
-        // Calculate deltas for stats tracking
-        $uploadDelta = 0;
-        $downloadDelta = 0;
+        // The baseline to diff against, and where it came from. Redis first;
+        // the durable record only when Redis has nothing. Deliberately
+        // separate from the swarm-count bookkeeping below: a peer recovered
+        // from the ledger has a baseline for delta purposes but genuinely is
+        // not in Redis, so it still counts as a new peer for seeder/leecher
+        // totals and the user/IP sets.
+        $baseline = $existingPeer !== null
+            ? ['uploaded' => $existingPeer['uploaded'] ?? 0, 'downloaded' => $existingPeer['downloaded'] ?? 0]
+            : $recoveredBaseline;
+
+        // max(0, ...) because a client that restarts reports its cumulative
+        // counters from zero again. Under-crediting the difference is correct;
+        // a negative delta would mean handing back bytes.
+        $uploadDelta = $baseline !== null ? max(0, $uploaded - $baseline['uploaded']) : 0;
+        $downloadDelta = $baseline !== null ? max(0, $downloaded - $baseline['downloaded']) : 0;
 
         if ($existingPeer) {
-            $uploadDelta = max(0, $uploaded - ($existingPeer['uploaded'] ?? 0));
-            $downloadDelta = max(0, $downloaded - ($existingPeer['downloaded'] ?? 0));
-
             // Update seeder/leecher counts if status changed
             if ($existingPeer['is_seeder'] !== $isSeeder) {
                 if ($isSeeder) {
@@ -122,7 +175,20 @@ final class PeerService
         return [
             'upload_delta' => $uploadDelta,
             'download_delta' => $downloadDelta,
+            // The baseline the deltas were diffed against. Null for a peer with
+            // no prior announce — that is a real state, not missing data, and
+            // recording it as 0 would claim a baseline nobody observed.
+            //
+            // Returned so the caller can persist it: a stored delta cannot be
+            // checked without the value it was derived from, so a wrong
+            // baseline would otherwise leave no trace anywhere.
+            'prior_up' => $baseline['uploaded'] ?? null,
+            'prior_down' => $baseline['downloaded'] ?? null,
             'was_existing' => $existingPeer !== null,
+            // True when Redis had lost this peer and the baseline came from the
+            // durable record instead. Distinguishes a real outage from a
+            // genuinely new peer, which look identical in Redis.
+            'baseline_recovered' => $existingPeer === null && $recoveredBaseline !== null,
             'status_changed' => $existingPeer && $existingPeer['is_seeder'] !== $isSeeder,
         ];
     }
@@ -135,7 +201,13 @@ final class PeerService
         $redis = $this->redis();
         $peerKey = $this->prefix."peers:{$torrentId}";
 
-        $existingPeer = $this->getPeer($torrentId, $peerId);
+        // Deliberately the raw read, not getPeer(): getPeer() self-heals an
+        // expired peer by calling removePeer(), so going through it here
+        // recurses without bound the moment the peer being removed is the
+        // expired one — which is every peer this is called for from
+        // cleanupExpiredPeers(). Removal does not care whether the peer was
+        // expired, only that it was there.
+        $existingPeer = $this->readPeer($torrentId, $peerId);
 
         if (! $existingPeer) {
             return null;
@@ -189,6 +261,20 @@ final class PeerService
         }
 
         return $peer;
+    }
+
+    /**
+     * Read a peer's stored data without the expiry check.
+     *
+     * getPeer() treats reading an expired peer as a cue to delete it, which is
+     * right for callers asking "is this peer live?" and wrong for removal
+     * itself — see removePeer().
+     */
+    private function readPeer(int $torrentId, string $peerId): ?array
+    {
+        $data = $this->redis()->hget($this->prefix."peers:{$torrentId}", $peerId);
+
+        return $data ? json_decode($data, true) : null;
     }
 
     /**
