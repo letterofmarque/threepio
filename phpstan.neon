@@ -1,0 +1,12 @@
+# PHPStan runs per package, not from the root: Larastan needs a bootable
+# Laravel to resolve models and facades, and that lives in each package's own
+# vendor/ — the monorepo root has no framework install at all. The binary and
+# the Larastan extension are shared from the root (see composer.json's `stan`
+# script), so there is one version of each rather than eleven.
+includes:
+    - ../../vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 1
+    paths:
+        - src
