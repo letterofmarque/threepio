@@ -15,14 +15,14 @@
         "source": "https://github.com/letterofmarque/marque"
     },
     "require": {
-        "php": "^8.4",
+        "php": "^8.3",
         "illuminate/support": "^13.0",
         "illuminate/routing": "^13.0",
         "illuminate/redis": "^13.0"
     },
     "require-dev": {
         "orchestra/testbench": "^11.0",
-        "pestphp/pest": "^5.0",
+        "pestphp/pest": "^4.7",
         "mockery/mockery": "^1.6"
     },
     "autoload": {
