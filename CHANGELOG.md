@@ -5,7 +5,7 @@ All notable changes to `marque/threepio` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Versioning
 follows the suite's [VERSIONING.md](../../VERSIONING.md). This changelog starts
 2026-08-26 — earlier releases aren't backfilled; see `git log` or
-[RELEASES.md](../../RELEASES.md) for the story up to this point.
+[docs/upgrading.md](../../docs/upgrading.md) for the story up to this point.
 
 ## [3.2.0] — 2026-09-04
 
