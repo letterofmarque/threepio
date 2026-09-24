@@ -24,7 +24,11 @@
         "orchestra/testbench": "^11.0",
         "pestphp/pest": "^4.7",
         "mockery/mockery": "^1.6",
-        "nunomaduro/pao": "^1.1"
+        "laravel/pao": "^1.1"
+    },
+    "suggest": {
+        "ext-redis": "Required to reach a Redis server, unless you install predis/predis instead. Every deployment that serves announces needs one of the two — peer storage is Redis, not Laravel's cache, and the announce path fatals without a working connection.",
+        "predis/predis": "Pure-PHP alternative to ext-redis. Either satisfies Laravel's REDIS_CLIENT; pick one."
     },
     "autoload": {
         "psr-4": {
@@ -38,7 +42,7 @@
     },
     "extra": {
         "branch-alias": {
-            "dev-main": "3.0.x-dev"
+            "dev-main": "3.x-dev"
         },
         "laravel": {
             "providers": [
