@@ -147,13 +147,14 @@ hex info_hashes and converts them back to binary for the response.
 
 The live swarm. Everything is in Redis with a configurable prefix. Expiry is lazy. A
 peer that stops announcing is skipped in peer lists once it is older than
-`peer_expiry`, and `getPeer()` deletes it on read. It stays in the seeder/leecher
-counters and the per-IP and per-user sets until `cleanupExpiredPeers()` removes it, which
-also recounts the counters from the peers present. Something has to call that
+`peer_expiry`. It stays in the seeder/leecher counters and the per-IP and per-user sets
+until something removes it: `getPeer()` reading it (which `upsertPeer()` does when the
+peer announces again), or `cleanupExpiredPeers()`, which also recounts the counters from
+the peers present. Both go through `removePeer()`. Something has to call that
 periodically. Bloodhound and hound each ship a `sync-swarm-counts` command that does it,
 and both schedule it hourly, so the scheduler is required.
 
-Nothing in Redis carries a TTL, deliberately. A peer leaves only through `removePeer()`,
+Nothing `PeerService` writes carries a TTL, deliberately. A peer leaves only through `removePeer()`,
 which keeps the counters and sets in step, and Redis drops a torrent's peer hash itself
 when its last peer goes.
 

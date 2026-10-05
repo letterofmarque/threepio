@@ -24,9 +24,12 @@ follows the suite's [VERSIONING.md](../../VERSIONING.md). This changelog starts
 
   **After upgrading**, delete any per-IP and per-user sets that are already inflated. They
   rebuild from live announces within one announce interval, because membership is now
-  re-asserted on every announce:
-  `redis-cli --scan --pattern '<prefix>ip:*:peers' | xargs -r redis-cli del` (and the same for
-  `user:*:peers`). The default prefix is `marque:`.
+  re-asserted on every announce. The full key prefix is Laravel's `REDIS_PREFIX` (by default
+  `<app-name>-database-`) followed by threepio's `THREEPIO_REDIS_PREFIX` (default `marque:`),
+  and the keys live in your Redis connection's database. Pass the same `-h`/`-p`/`-a`/`-n`
+  to both calls:
+  `redis-cli --scan --pattern '*marque:ip:*:peers' | xargs -r redis-cli del`, and the same
+  with `*marque:user:*:peers`.
 - **The per-IP and per-user sets are re-asserted on every announce**, not just a peer's
   first. A cleared or lost set rebuilds from live traffic instead of undercounting, and a
   peer that changes IP now leaves its old address's count, which it never did before

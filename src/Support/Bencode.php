@@ -44,7 +44,7 @@ final class Bencode
         // One value, and nothing after it but whitespace: a downloaded .torrent
         // can pick up a trailing newline, and refusing that would break uploads
         // that real clients accept. Anything else trailing is not bencode.
-        if (trim(substr($data, $offset)) !== '') {
+        if (rtrim(substr($data, $offset), " \t\r\n") !== '') {
             throw new InvalidArgumentException('Unexpected data after the bencoded value');
         }
 

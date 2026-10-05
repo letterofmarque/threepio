@@ -166,6 +166,7 @@ describe('Bencode', function () {
             'unterminated list' => 'li1e',
             'unterminated dictionary' => 'd1:ai1e',
             'non-string dictionary key' => 'di1ei2ee',
+            'trailing NUL' => "i1e\0",
         ]);
 
         it('tolerates trailing whitespace, which downloaded .torrent files pick up', function () {
