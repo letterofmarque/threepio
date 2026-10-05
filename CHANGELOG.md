@@ -7,7 +7,7 @@ follows the suite's [VERSIONING.md](../../VERSIONING.md). This changelog starts
 2026-08-26 — earlier releases aren't backfilled; see `git log` or
 [docs/upgrading.md](../../docs/upgrading.md) for the story up to this point.
 
-## [Unreleased]
+## [3.2.1] — 2026-10-05
 
 > Peer lists are a random selection, not the same peers reshuffled; the decoder rejects malformed bencode; and dead peers no longer linger in the swarm counters or the per-IP and per-user sets.
 
