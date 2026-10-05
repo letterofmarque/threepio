@@ -150,8 +150,8 @@ peer that stops announcing is skipped in peer lists once it is older than
 `peer_expiry`. It stays in the seeder/leecher counters and the per-IP and per-user sets
 until something removes it: `getPeer()` reading it (which `upsertPeer()` does when the
 peer announces again), or `cleanupExpiredPeers()`, which also recounts the counters from
-the peers present. Both go through `removePeer()`. Something has to call that
-periodically. Bloodhound and hound each ship a `sync-swarm-counts` command that does it,
+the peers present. Both go through `removePeer()`. Something has to call
+`cleanupExpiredPeers()` periodically. Bloodhound and hound each ship a `sync-swarm-counts` command that does it,
 and both schedule it hourly, so the scheduler is required.
 
 Nothing `PeerService` writes carries a TTL, deliberately. A peer leaves only through `removePeer()`,
