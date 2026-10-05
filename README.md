@@ -297,4 +297,4 @@ throttled, and a peer announcing from it is usually a client nobody has configur
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
