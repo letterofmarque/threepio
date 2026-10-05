@@ -150,19 +150,32 @@ final class PeerService
             } else {
                 $this->incrementLeechers($torrentId);
             }
-
-            // Track user's active peers (only for authenticated trackers)
-            if ($userId !== null) {
-                $redis->sadd($this->prefix."user:{$userId}:peers", "{$torrentId}:{$peerId}");
-            }
-
-            // Track IP's active peers
-            $redis->sadd($this->prefix."ip:{$ip}:peers", $peerId);
         }
 
-        // Store peer data with TTL
+        // Membership is (re)asserted on every announce, not just the first.
+        // SADD is idempotent, so this costs nothing for a peer already there,
+        // and a set that was cleared (or lost) rebuilds from live announces
+        // instead of undercounting until every peer has left and rejoined.
+        if ($userId !== null) {
+            $redis->sadd($this->prefix."user:{$userId}:peers", "{$torrentId}:{$peerId}");
+        }
+
+        // A peer that moved address leaves its old IP's count; removePeer()
+        // only knows the current one.
+        if ($existingPeer !== null && ($existingPeer['ip'] ?? $ip) !== $ip) {
+            $redis->srem($this->prefix."ip:{$existingPeer['ip']}:peers", $peerId);
+        }
+
+        $redis->sadd($this->prefix."ip:{$ip}:peers", $peerId);
+
+        // No TTL on the hash, deliberately. A TTL dropped the whole hash once a
+        // torrent went quiet, without touching the seeder/leecher counters or
+        // the per-IP and per-user sets, which then counted dead peers forever:
+        // enough of them and an IP hit hound's cap for good (#10804). Peers
+        // leave only through removePeer(), which keeps all of those in step,
+        // driven by cleanupExpiredPeers() on the scheduler. Redis deletes the
+        // hash itself when its last peer is removed.
         $redis->hset($peerKey, $peerId, json_encode($peerData));
-        $redis->expire($peerKey, $this->peerExpiry * 2); // Key expiry longer than peer expiry
 
         // Update swarm totals
         if ($uploadDelta > 0) {
@@ -318,16 +331,14 @@ final class PeerService
                 'port' => $peer['port'],
                 'peer_id' => $peer['peer_id'],
             ];
-
-            if (count($peers) >= $limit) {
-                break;
-            }
         }
 
-        // Shuffle for fairness
+        // Shuffle BEFORE cutting to the limit. Cutting first in hash order and
+        // shuffling after handed every client the same peers in a new order,
+        // so in a swarm larger than the limit most peers were never offered.
         shuffle($peers);
 
-        return $peers;
+        return array_slice($peers, 0, max(0, $limit));
     }
 
     /**
@@ -399,13 +410,33 @@ final class PeerService
         $now = time();
         $removed = 0;
 
+        $seeders = 0;
+        $leechers = 0;
+
         foreach ($allPeers as $peerId => $data) {
             $peer = json_decode($data, true);
 
             if ($now - $peer['last_action'] > $this->peerExpiry) {
                 $this->removePeer($torrentId, $peerId);
                 $removed++;
+
+                continue;
             }
+
+            $peer['is_seeder'] ? $seeders++ : $leechers++;
+        }
+
+        // Settle the counters to the peers actually present. incr/decr drift
+        // stays wrong forever otherwise (a lost decrement, a peer removed
+        // twice, keys left by the old hash TTL), and this sweep runs hourly
+        // anyway. An announce landing between the read above and these writes
+        // can be miscounted until the next sweep; that is the trade for not
+        // locking the hot path.
+        // A zero is a missing key rather than a stored 0: the sweep visits every
+        // torrent in the catalogue, and most have no peers at all.
+        foreach (['seeders' => $seeders, 'leechers' => $leechers] as $counter => $count) {
+            $key = $this->prefix."torrent:{$torrentId}:{$counter}";
+            $count > 0 ? $redis->set($key, $count) : $redis->del($key);
         }
 
         return $removed;

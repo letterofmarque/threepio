@@ -38,7 +38,7 @@ without a working connection.
 It is genuinely Redis, not Laravel's cache pointed at Redis. `PeerService` uses Redis data
 structures directly: a hash of peers per torrent, sets for per-user and per-IP
 membership, `incr`/`decr` for atomic seeder/leecher counters, `incrby` for swarm byte
-totals, and `expire` on each torrent's peer hash. None of that is expressible through
+totals. None of that is expressible through
 Laravel's cache abstraction, which offers get/put/forget on opaque values. Pointing
 `CACHE_STORE` at file or database does not degrade the tracker gracefully; it fatals on the
 first announce.
@@ -101,11 +101,14 @@ Bencode::decode('d8:completei4e8:intervali1800ee');
 ```
 
 Dictionary keys are sorted on encode, as the spec requires. A sequential array encodes as
-a list and an associative one as a dictionary, decided by `array_is_list()`. Some malformed
-input throws `InvalidArgumentException`: a positive integer with a leading zero (`i03e`),
-`-0`, and a string shorter than its declared length. The decoder is laxer than the spec
-elsewhere. `i-05e` decodes to `-5`, `iabce` decodes to `0`, `x:` decodes to an empty string, and trailing bytes after the first value are ignored. Don't rely
-on it to reject hostile input (#10804).
+a list and an associative one as a dictionary, decided by `array_is_list()`.
+
+Malformed input throws `InvalidArgumentException`, because tracker and upload input is
+untrusted. That covers integers that aren't plain digits (`iabce`, `ie`, `i-e`), leading
+zeros including `i03e`, `-0` and `i-05e`, integers that overflow 64 bits, string lengths
+that aren't plain digits or have a leading zero, a string shorter than its declared length,
+an unknown type byte, and an unterminated list or dictionary. So is anything after the
+value except trailing whitespace, which a downloaded `.torrent` can pick up.
 
 Note that decoding is lossy in one direction: bencode does not distinguish a list from a
 dictionary with sequential integer keys, so a round trip can change shape. It is the
@@ -145,10 +148,14 @@ hex info_hashes and converts them back to binary for the response.
 The live swarm. Everything is in Redis with a configurable prefix. Expiry is lazy. A
 peer that stops announcing is skipped in peer lists once it is older than
 `peer_expiry`, and `getPeer()` deletes it on read. It stays in the seeder/leecher
-counters until `cleanupExpiredPeers()` removes it. Something has to call that
+counters and the per-IP and per-user sets until `cleanupExpiredPeers()` removes it, which
+also recounts the counters from the peers present. Something has to call that
 periodically. Bloodhound and hound each ship a `sync-swarm-counts` command that does it,
-and both schedule it hourly. The torrent's whole peer hash also carries a Redis TTL of
-twice `peer_expiry`, refreshed on every announce.
+and both schedule it hourly, so the scheduler is required.
+
+Nothing in Redis carries a TTL, deliberately. A peer leaves only through `removePeer()`,
+which keeps the counters and sets in step, and Redis drops a torrent's peer hash itself
+when its last peer goes.
 
 | Method | Purpose |
 |---|---|
@@ -164,13 +171,11 @@ twice `peer_expiry`, refreshed on every announce.
 
 `getPeersForAnnounce()` filters by what the requester is: a seeder is handed **leechers
 only**, since two seeders have nothing to exchange, while a leecher gets everyone. Expired
-peers and the requester itself are skipped. The list is cut at `$limit` in Redis hash
-order and then shuffled, so a swarm larger than the limit hands out the same peers each
-time, just in a different order (#10804).
+peers and the requester itself are skipped. The eligible peers are shuffled and then cut
+at `$limit`, so a swarm larger than the limit hands out a different selection each time.
 
-Pass `userId: null` for a peer with no account; the per-user keys are not maintained for
-it. `userId: 0` is treated as a real user, and every peer passed with it lands in one
-`user:0:peers` set that only grows. Hound currently passes `0` (#10804).
+Pass `userId: null` for a peer with no account (hound does); the per-user keys are not
+maintained for it. `userId: 0` is treated as a real user id.
 
 #### The baseline resolver
 

@@ -148,5 +148,34 @@ describe('Bencode', function () {
         it('throws on truncated string', function () {
             Bencode::decode('10:short');
         })->throws(InvalidArgumentException::class);
+
+        // Tracker and upload input is untrusted; each of these used to decode
+        // to something (#10804).
+        it('rejects malformed input', function (string $input) {
+            Bencode::decode($input);
+        })->throws(InvalidArgumentException::class)->with([
+            'negative leading zero' => 'i-05e',
+            'non-digit integer' => 'iabce',
+            'empty integer' => 'ie',
+            'bare minus' => 'i-e',
+            'integer overflow' => 'i99999999999999999999e',
+            'unknown type byte' => 'x:',
+            'non-digit length' => 'a:b',
+            'length with leading zero' => '05:hello',
+            'trailing bytes' => 'i3ejunk',
+            'unterminated list' => 'li1e',
+            'unterminated dictionary' => 'd1:ai1e',
+            'non-string dictionary key' => 'di1ei2ee',
+        ]);
+
+        it('tolerates trailing whitespace, which downloaded .torrent files pick up', function () {
+            expect(Bencode::decode("d1:ai1ee\n"))->toBe(['a' => 1]);
+        });
+
+        it('still decodes zero and negative integers', function () {
+            expect(Bencode::decode('i0e'))->toBe(0)
+                ->and(Bencode::decode('i-42e'))->toBe(-42)
+                ->and(Bencode::decode('0:'))->toBe('');
+        });
     });
 });

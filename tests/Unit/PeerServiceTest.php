@@ -192,3 +192,94 @@ describe('baseline resolver', function () {
         expect($this->peers->getSeeders(7))->toBe(1);
     });
 });
+
+describe('peer selection and expiry (#10804)', function () {
+    test('a swarm larger than the limit hands out different peers, not just a different order', function () {
+        foreach (range(1, 40) as $i) {
+            addPeer($this->peers, 1, sprintf('-qB4210-%012d', $i), isSeeder: false);
+        }
+
+        $seen = [];
+        foreach (range(1, 10) as $_) {
+            foreach ($this->peers->getPeersForAnnounce(1, 'requester', false, 5) as $peer) {
+                $seen[$peer['peer_id']] = true;
+            }
+        }
+
+        // Truncate-then-shuffle always returns the same 5; ten random draws of
+        // 5 from 40 cover far more than that.
+        expect(count($seen))->toBeGreaterThan(5);
+    });
+
+    test('the peer hash has no TTL, so peers only leave through removePeer', function () {
+        addPeer($this->peers, 1, '-qB4210-aaaaaaaaaaaa');
+
+        $redis = Redis::connection(config('threepio.redis.connection', 'default'));
+        $key = config('threepio.redis.prefix', 'marque:').'peers:1';
+
+        // A TTL let the whole hash vanish without touching the counters or the
+        // per-IP and per-user sets, which then counted dead peers forever.
+        expect($redis->ttl($key))->toBe(-1);
+    });
+
+    test('the sweep takes a peer out of the IP count', function () {
+        addPeer($this->peers, 1, '-qB4210-aaaaaaaaaaaa');
+        backdatePeer(1, '-qB4210-aaaaaaaaaaaa');
+
+        $this->peers->cleanupExpiredPeers(1);
+
+        expect($this->peers->getIpPeerCount('10.0.0.1'))->toBe(0);
+    });
+
+    test('per-IP and per-user sets rebuild from the next announce after being cleared', function () {
+        addPeer($this->peers, 1, '-qB4210-aaaaaaaaaaaa');
+
+        $redis = Redis::connection(config('threepio.redis.connection', 'default'));
+        $prefix = config('threepio.redis.prefix', 'marque:');
+        $redis->del($prefix.'ip:10.0.0.1:peers', $prefix.'user:1:peers');
+
+        addPeer($this->peers, 1, '-qB4210-aaaaaaaaaaaa'); // its next announce
+
+        expect($this->peers->getIpPeerCount('10.0.0.1'))->toBe(1)
+            ->and($this->peers->getUserPeerCountForTorrent(1, 1))->toBe(1);
+    });
+
+    test('a peer that changes IP leaves its old IP\'s count', function () {
+        addPeer($this->peers, 1, '-qB4210-aaaaaaaaaaaa');
+
+        $this->peers->upsertPeer(
+            torrentId: 1, peerId: '-qB4210-aaaaaaaaaaaa', userId: 1, ip: '10.0.0.2', port: 51413,
+            uploaded: 0, downloaded: 0, left: 0, userAgent: 'test', isSeeder: true,
+        );
+
+        expect($this->peers->getIpPeerCount('10.0.0.1'))->toBe(0)
+            ->and($this->peers->getIpPeerCount('10.0.0.2'))->toBe(1);
+    });
+
+    test('the sweep recounts counters that drifted from the peers actually present', function () {
+        addPeer($this->peers, 1, '-qB4210-aaaaaaaaaaaa', isSeeder: true);
+
+        $redis = Redis::connection(config('threepio.redis.connection', 'default'));
+        $prefix = config('threepio.redis.prefix', 'marque:');
+        $redis->set($prefix.'torrent:1:seeders', 7);
+        $redis->set($prefix.'torrent:1:leechers', 3);
+
+        $this->peers->cleanupExpiredPeers(1);
+
+        expect($this->peers->getSeeders(1))->toBe(1)
+            ->and($this->peers->getLeechers(1))->toBe(0);
+    });
+
+    test('the sweep zeroes the counters of a torrent with no peers left', function () {
+        $redis = Redis::connection(config('threepio.redis.connection', 'default'));
+        $prefix = config('threepio.redis.prefix', 'marque:');
+        $redis->set($prefix.'torrent:2:seeders', 4);
+
+        $this->peers->cleanupExpiredPeers(2);
+        $this->peers->cleanupExpiredPeers(3); // never had a peer
+
+        expect($this->peers->getSeeders(2))->toBe(0)
+            ->and($redis->exists($prefix.'torrent:2:seeders'))->toBe(0)
+            ->and($redis->exists($prefix.'torrent:3:seeders'))->toBe(0);
+    });
+});

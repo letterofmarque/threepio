@@ -7,6 +7,39 @@ follows the suite's [VERSIONING.md](../../VERSIONING.md). This changelog starts
 2026-08-26 — earlier releases aren't backfilled; see `git log` or
 [docs/upgrading.md](../../docs/upgrading.md) for the story up to this point.
 
+## [Unreleased]
+
+> Peer lists are a random selection, not the same peers reshuffled; the decoder rejects malformed bencode; and dead peers no longer linger in the swarm counters or the per-IP and per-user sets.
+
+### Fixed
+
+- **Dead peers could stay counted forever, and lock an IP out.** Each torrent's peer hash
+  carried a Redis TTL. Once a torrent went quiet for twice `peer_expiry`, the whole hash
+  vanished without going through `removePeer()`. The seeder/leecher counters and the
+  per-IP and per-user sets kept its peers, and the hourly sweep could no longer find them.
+  Enough of them and an IP reached hound's `max_per_ip`, or bloodhound's anti-cheat
+  limits, and was refused for good. The hash no longer has a TTL. Peers leave only through
+  `removePeer()`, driven by `cleanupExpiredPeers()`, which now also recounts the counters
+  from the peers present and deletes them at zero (#10804).
+
+  **After upgrading**, delete any per-IP and per-user sets that are already inflated. They
+  rebuild from live announces within one announce interval, because membership is now
+  re-asserted on every announce:
+  `redis-cli --scan --pattern '<prefix>ip:*:peers' | xargs -r redis-cli del` (and the same for
+  `user:*:peers`). The default prefix is `marque:`.
+- **The per-IP and per-user sets are re-asserted on every announce**, not just a peer's
+  first. A cleared or lost set rebuilds from live traffic instead of undercounting, and a
+  peer that changes IP now leaves its old address's count, which it never did before
+  (#10804).
+- **`getPeersForAnnounce()` returned the same peers every time.** It cut the list to
+  `$limit` in hash order and then shuffled, so a swarm larger than the limit only ever
+  offered its first N peers, in a different order. It now shuffles first (#10804).
+- **`Bencode::decode()` accepted malformed input.** `i-05e` gave `-5`, `iabce` gave `0`,
+  `x:` gave an empty string, overflowing integers clamped silently, and trailing bytes were
+  ignored. An unterminated list or dictionary raised a PHP warning instead of an
+  exception. All of these now throw `InvalidArgumentException`. Trailing whitespace after
+  the value is still accepted, because downloaded `.torrent` files pick it up (#10804).
+
 ## [3.2.0] — 2026-09-04
 
 > Lowers the PHP floor to 8.3, matching Laravel 13's own requirement.

@@ -39,8 +39,16 @@ final class Bencode
     public static function decode(string $data): mixed
     {
         $offset = 0;
+        $value = self::decodeValue($data, $offset);
 
-        return self::decodeValue($data, $offset);
+        // One value, and nothing after it but whitespace: a downloaded .torrent
+        // can pick up a trailing newline, and refusing that would break uploads
+        // that real clients accept. Anything else trailing is not bencode.
+        if (trim(substr($data, $offset)) !== '') {
+            throw new InvalidArgumentException('Unexpected data after the bencoded value');
+        }
+
+        return $value;
     }
 
     /**
@@ -105,11 +113,12 @@ final class Bencode
             throw new InvalidArgumentException('Unexpected end of data');
         }
 
-        return match ($data[$offset]) {
-            'i' => self::decodeInt($data, $offset),
-            'l' => self::decodeList($data, $offset),
-            'd' => self::decodeDict($data, $offset),
-            default => self::decodeString($data, $offset),
+        return match (true) {
+            $data[$offset] === 'i' => self::decodeInt($data, $offset),
+            $data[$offset] === 'l' => self::decodeList($data, $offset),
+            $data[$offset] === 'd' => self::decodeDict($data, $offset),
+            ctype_digit($data[$offset]) => self::decodeString($data, $offset),
+            default => throw new InvalidArgumentException("Unknown type byte at offset $offset"),
         };
     }
 
@@ -124,7 +133,14 @@ final class Bencode
             throw new InvalidArgumentException('Invalid string encoding');
         }
 
-        $length = (int) substr($data, $offset, $colonPos - $offset);
+        $digits = substr($data, $offset, $colonPos - $offset);
+
+        // A length is plain digits, with no leading zero unless it is zero.
+        if (! preg_match('/^(0|[1-9][0-9]*)$/', $digits)) {
+            throw new InvalidArgumentException("Invalid string length at offset $offset");
+        }
+
+        $length = (int) $digits;
         $offset = $colonPos + 1;
         $value = substr($data, $offset, $length);
 
@@ -152,9 +168,10 @@ final class Bencode
 
         $value = substr($data, $offset, $endPos - $offset);
 
-        // Validate integer format (no leading zeros except for 0 itself)
-        if ($value === '-0' || ($value[0] === '0' && strlen($value) > 1)) {
-            throw new InvalidArgumentException('Invalid integer format');
+        // Digits only, an optional minus, no leading zeros (so no -0), and it
+        // must fit: (int) would otherwise clamp an overflow to PHP_INT_MAX.
+        if (! preg_match('/^(0|-?[1-9][0-9]*)$/', $value) || (string) (int) $value !== $value) {
+            throw new InvalidArgumentException("Invalid integer at offset $offset");
         }
 
         $offset = $endPos + 1;
@@ -173,7 +190,7 @@ final class Bencode
 
         $list = [];
 
-        while ($data[$offset] !== 'e') {
+        while (self::peek($data, $offset) !== 'e') {
             $list[] = self::decodeValue($data, $offset);
         }
 
@@ -193,7 +210,7 @@ final class Bencode
 
         $dict = [];
 
-        while ($data[$offset] !== 'e') {
+        while (self::peek($data, $offset) !== 'e') {
             $key = self::decodeString($data, $offset);
             $dict[$key] = self::decodeValue($data, $offset);
         }
@@ -201,5 +218,18 @@ final class Bencode
         $offset++; // Skip 'e'
 
         return $dict;
+    }
+
+    /**
+     * The byte at the offset, or a clean failure where an unterminated list or
+     * dictionary runs off the end (it used to surface as a PHP warning).
+     */
+    private static function peek(string $data, int $offset): string
+    {
+        if ($offset >= strlen($data)) {
+            throw new InvalidArgumentException('Unexpected end of data');
+        }
+
+        return $data[$offset];
     }
 }
