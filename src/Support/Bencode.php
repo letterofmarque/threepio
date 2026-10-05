@@ -52,6 +52,42 @@ final class Bencode
     }
 
     /**
+     * A bencoded dictionary's top-level values as their original bytes, keyed
+     * by name.
+     *
+     * The info_hash is sha1 over the info dictionary exactly as the .torrent
+     * holds it. Decoding and re-encoding normalises it (key order, a
+     * dictionary with keys "0", "1"… turning into a list), so a hash computed
+     * that way can differ from the one every client announces (#10946). Use
+     * `sha1(Bencode::rawDictionary($torrent)['info'])`. The same bytes let a
+     * caller rebuild the file around an untouched info dictionary.
+     *
+     * The whole input is validated as strictly as decode() does.
+     *
+     * @return array<string, string>
+     */
+    public static function rawDictionary(string $data): array
+    {
+        self::decode($data);
+
+        if ($data[0] !== 'd') {
+            throw new InvalidArgumentException('Not a bencoded dictionary');
+        }
+
+        $offset = 1;
+        $raw = [];
+
+        while (self::peek($data, $offset) !== 'e') {
+            $key = self::decodeString($data, $offset);
+            $start = $offset;
+            self::decodeValue($data, $offset);
+            $raw[$key] = substr($data, $start, $offset - $start);
+        }
+
+        return $raw;
+    }
+
+    /**
      * Encode a string.
      */
     private static function encodeString(string $value): string

@@ -114,6 +114,18 @@ Note that decoding is lossy in one direction: bencode does not distinguish a lis
 dictionary with sequential integer keys, so a round trip can change shape. It is the
 protocol's ambiguity, not this implementation's.
 
+That is also why **an info_hash must never be computed from a decoded array.** Clients hash
+the info dictionary's bytes as the file holds them, and a round trip can change those
+bytes (key order, a dictionary turning into a list). `rawDictionary()` returns each
+top-level value's original bytes, validated as strictly as `decode()`:
+
+```php
+$infoHash = sha1(Bencode::rawDictionary($torrentFile)['info']);
+```
+
+The same bytes let you rebuild a .torrent around an untouched info dictionary (a new
+`announce`, say) without changing its hash.
+
 ### TrackerResponse
 
 Builds the three response shapes a tracker returns, each already bencoded with the right

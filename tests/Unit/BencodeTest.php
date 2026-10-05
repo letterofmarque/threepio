@@ -179,4 +179,33 @@ describe('Bencode', function () {
                 ->and(Bencode::decode('0:'))->toBe('');
         });
     });
+
+    describe('rawDictionary', function () {
+        // The info_hash is sha1 over the info dictionary's ORIGINAL bytes. A
+        // decode-then-encode round trip normalises them (key order, list vs
+        // dictionary) and gives a hash no client announces (#10946).
+        it('returns each top-level value as its original bytes', function () {
+            $info = 'd4:name4:test6:lengthi5ee'; // keys out of order, on purpose
+
+            $raw = Bencode::rawDictionary('d8:announce3:x:y4:info'.$info.'e');
+
+            expect($raw)->toBe(['announce' => '3:x:y', 'info' => $info])
+                ->and(Bencode::encode(Bencode::decode($info)))->not->toBe($info);
+        });
+
+        it('keeps nested containers byte-for-byte', function () {
+            $info = 'd5:filesld6:lengthi1e4:pathl1:aeee4:name1:xe';
+
+            expect(Bencode::rawDictionary('d4:info'.$info.'e')['info'])->toBe($info);
+        });
+
+        it('refuses anything that is not a dictionary', function (string $input) {
+            Bencode::rawDictionary($input);
+        })->throws(InvalidArgumentException::class)->with([
+            'a list' => 'li1ee',
+            'an integer' => 'i1e',
+            'malformed' => 'd4:infoi-05ee',
+            'trailing junk' => 'd1:ai1eejunk',
+        ]);
+    });
 });

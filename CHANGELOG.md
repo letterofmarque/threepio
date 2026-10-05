@@ -7,6 +7,19 @@ follows the suite's [VERSIONING.md](../../VERSIONING.md). This changelog starts
 2026-08-26 — earlier releases aren't backfilled; see `git log` or
 [docs/upgrading.md](../../docs/upgrading.md) for the story up to this point.
 
+## [Unreleased]
+
+> Adds `Bencode::rawDictionary()`, the original bytes of each top-level value, so an info_hash can be computed the way clients compute it.
+
+### Added
+
+- **`Bencode::rawDictionary(string $data): array`** returns a bencoded dictionary's
+  top-level values as their original bytes, keyed by name, validated as strictly as
+  `decode()`. An info_hash is sha1 over the info dictionary exactly as the .torrent holds
+  it. Decoding and re-encoding can change those bytes, so
+  `sha1(Bencode::rawDictionary($torrent)['info'])` is the correct way to compute one. trove 4.4
+  uses it (#10946).
+
 ## [3.2.1] — 2026-10-05
 
 > Peer lists are a random selection, not the same peers reshuffled; the decoder rejects malformed bencode; and dead peers no longer linger in the swarm counters or the per-IP and per-user sets.
