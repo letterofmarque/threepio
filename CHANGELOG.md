@@ -7,6 +7,76 @@ follows the suite's [VERSIONING.md](../../VERSIONING.md). This changelog starts
 2026-08-26 — earlier releases aren't backfilled; see `git log` or
 [docs/upgrading.md](../../docs/upgrading.md) for the story up to this point.
 
+## [4.0.0] — 2026-10-20
+
+> Peer storage made to be credited against: one read of a peer feeds anti-cheat and credit, reads never mutate, a member's baseline outlives the swarm when asked to, the per-IP count is of sessions, binary peer IDs are recorded, and announce and scrape parameters come from the raw query string.
+
+### Changed
+
+- **Breaking: the per-IP count is of sessions, not peer_ids.** `getIpPeerCount()` is
+  replaced by `getIpSessionCount()`, which counts `ip:{ip}:sessions`, a set of
+  `"{torrent}:{peer_id}"`. A client using one peer_id for every torrent counts once per
+  torrent, and stopping one torrent removes only that session. Before, such a client
+  counted once in total and left the count on its first `stopped`, while a client with a
+  peer_id per torrent counted once per torrent. The set expires after twice `peer_expiry`
+  without an announce. **After upgrading**, delete the old sets once:
+  `redis-cli --scan --pattern '*marque:ip:*:peers' | xargs -r redis-cli del`, with the
+  connection flags (`-h`, `-p`, `-n`) of your tracker's Redis on both calls, and your
+  `threepio.redis.prefix` in place of `marque:` if you changed it.
+- **Breaking: reads never mutate.** `getPeer()` answers null for an expired peer and
+  leaves it in place; only `cleanupExpiredPeers()` (and `removePeer()`) take a peer out of
+  the swarm.
+- **A counter that goes backwards is credited as a new session.** A client restarted
+  under the same peer_id reports from zero again. The delta is now what it reports,
+  where it was clamped to 0 and lost everything between the restart and the announce.
+- **`getUserPeerCountForTorrent()` counts from the torrent's peer hash** (live peers
+  whose `user_id` matches) instead of scanning every torrent in the member's set, and
+  accepts a `livePeers()` result already read this announce.
+- **Records are keyed by the raw peer ID and no longer repeat it inside the JSON**, and
+  the user agent is scrubbed to UTF-8. BEP 3 allows a peer ID of any 20 bytes; one that
+  wasn't UTF-8 made `json_encode()` return false, so the peer was never recorded (#11058).
+  An encoding failure now throws rather than storing nothing.
+- **A record owned by another user is never a baseline**, from the swarm hash or a
+  retained record. Overwriting it moves the peer between the two users' sets.
+- **Intervals are measured on Carbon's clock**, not `time()`: the same clock a Laravel
+  app stamps its records with, so a tracker's stored timestamps and threepio's
+  intervals agree (and tests that travel in time move both).
+- **The resolver is told the announcing user**, as a third argument, and may return
+  `left` and `last_action`.
+
+### Added
+
+- **`PeerService::withPeerLock($torrentId, $peerId, $work)`**: runs `$work` while holding
+  that peer's lock (a Redis key set if absent, expiring after 5 s, released only by its
+  holder), or returns null if another holder kept it for the wait. A tracker crediting
+  announces needs one peer's announces handled one at a time.
+- **`Support\RawQuery`**: the announce or scrape query string as the client sent it. Read
+  `info_hash` and `peer_id` from it, not from `$request->get()`. Laravel's TrimStrings
+  middleware, global by default, strips NUL and whitespace bytes from the ends of every
+  query value, which breaks about one binary hash in twenty, and PHP keeps only the last of
+  a repeated key, which a multi-hash scrape sends. `first($key)` and `all($key)`. It reads
+  `info_hash[]=` as `info_hash`.
+- **`PeerService::peersOfUser($userId)`**: a member's live peers on every torrent, each
+  with its record, read from `user:{id}:peers` and checked against the swarm hash in one
+  pipelined round trip. A set member that no longer applies (expired, or another member's
+  record under the same peer ID) is left out. Bloodhound lists a member's sessions with it.
+- **`lookup($torrentId, $peerId, $userId): PeerLookup`**, one read of a peer for
+  everything that judges or credits its announce. `upsertPeer(..., lookup:)` takes it,
+  so anti-cheat and the credit see the same baseline and the peer is not read twice.
+- **`PeerLookup::credit($uploaded, $downloaded)`**, the credit an announce earns against
+  the lookup's baseline, computed without touching Redis. A tracker can record it
+  durably before writing the swarm; `upsertPeer()` arrives at the same figures. It
+  includes `measured_at`, the moment the interval ended, which is also the peer's new
+  last announce.
+- **`upsertPeer()` returns `prior_at`, `prior_left`, `interval_seconds` and
+  `baseline_source`**: when the interval the announce closes began, the peer's state
+  then, the interval capped at `peer_expiry`, and where the baseline came from.
+- **`retainBaselinesFor($seconds)`**: the sweep keeps an expired peer's record in
+  `gone:{torrent}` as a baseline for that long, used once by the peer's next announce.
+  Off by default (hound).
+- **`find()`**, the raw stored record, and **`livePeers()`**, every live peer on a
+  torrent in one `HGETALL`; `getPeersForAnnounce()` accepts it.
+
 ## [3.3.0] — 2026-10-06
 
 > Adds `Bencode::rawDictionary()`, the original bytes of each top-level value, so an info_hash can be computed the way clients compute it.

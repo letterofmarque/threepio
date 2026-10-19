@@ -65,15 +65,18 @@ catalogue-only or API-only deployment with no tracker package. If you have `bloo
 #### What happens if Redis loses state
 
 Worth knowing before you decide where to run it. Redis holds the baseline that announce
-deltas are diffed against. If it restarts and comes back empty, the next announce has
-nothing to compare against and credits **zero** — silently — for everything that peer
-transferred across the gap.
+deltas are diffed against. If it restarts and comes back empty, or evicts a peer's record,
+the next announce has nothing to compare against and credits **zero** — silently — for
+everything that peer transferred across the gap.
 
 On a public tracker that costs nothing, because nobody is credited anyway. On a private
-tracker it is ratio data quietly going wrong, which is what gets people banned.
-`bloodhound` closes this with the [baseline resolver](#the-baseline-resolver) wired to its
-announce ledger, so the durable record supplies the baseline Redis lost. That mechanism is
-the reason the ledger exists.
+tracker it is ratio data quietly going wrong, which is what gets people banned. So
+`bloodhound` requires a Redis that persists (`appendonly yes`) and never evicts
+(`maxmemory-policy noeviction`), and refuses announces in production until it does. If
+Redis is lost anyway, bloodhound opens a recovery window in which the
+[resolver](#retained-baselines-and-the-resolver) reads a missing baseline from its
+announce ledger. See
+[bloodhound's README](../bloodhound/README.md#redis).
 
 ## What's in it
 
@@ -82,6 +85,8 @@ the reason the ledger exists.
 | `Support\Bencode` | Bencode encoder/decoder |
 | `Support\TrackerResponse` | Builds bencoded announce, scrape and failure responses |
 | `Services\PeerService` | Redis-backed live peer storage |
+| `Support\PeerLookup` | One read of a peer: its baseline, where it came from, and the credit an announce earns against it |
+| `Support\RawQuery` | The announce or scrape query string as the client sent it: read `info_hash` and `peer_id` from it, never `$request->get()` |
 | `Enums\AnnounceEvent` | `started`, `completed`, `stopped` |
 | `Http\Middleware\BlockBrowsers` | Rejects web browsers from tracker endpoints |
 
@@ -157,30 +162,68 @@ hex info_hashes and converts them back to binary for the response.
 
 ### PeerService
 
-The live swarm. Everything is in Redis with a configurable prefix. Expiry is lazy. A
-peer that stops announcing is skipped in peer lists once it is older than
-`peer_expiry`. It stays in the seeder/leecher counters and the per-IP and per-user sets
-until something removes it: `getPeer()` reading it (which `upsertPeer()` does when the
-peer announces again), or `cleanupExpiredPeers()`, which also recounts the counters from
-the peers present. Both go through `removePeer()`. Something has to call
-`cleanupExpiredPeers()` periodically. Bloodhound and hound each ship a `sync-swarm-counts` command that does it,
-and both schedule it hourly, so the scheduler is required.
+The live swarm. Everything is in Redis with a configurable prefix.
 
-Nothing `PeerService` writes carries a TTL, deliberately. A peer leaves only through `removePeer()`,
-which keeps the counters and sets in step, and Redis drops a torrent's peer hash itself
-when its last peer goes.
+**Reads never change anything.** A peer that stops announcing is skipped in peer lists
+and per-member counts once it is older than `peer_expiry`, and `getPeer()` answers null
+for it. The seeder, leecher and per-IP counts read stored counters and sets, so they
+include it until the sweep.
+But it stays in the hash, the seeder/leecher counters and the per-IP and per-user sets
+until `cleanupExpiredPeers()` removes it. That sweep is the only way an expired peer
+leaves; it also recounts the counters from the peers present. Something has to call it
+periodically: bloodhound and hound ship `bloodhound:sync-swarm-counts` and
+`hound:sync-swarm-counts`, which do,
+and both schedule it hourly, so the scheduler is required. A `stopped` announce removes
+its peer immediately through `removePeer()`.
+
+The peer hash has no TTL, deliberately. A peer leaves only through `removePeer()`, which
+keeps the counters and sets in step, and Redis drops a torrent's peer hash itself when its
+last peer goes. The per-IP sessions set and the retained-baseline hash do carry TTLs,
+because both are safe to lose: they self-clean when an IP or a torrent goes quiet.
 
 | Method | Purpose |
 |---|---|
-| `upsertPeer(...)` | Add or update a peer; returns the peer's computed deltas |
-| `removePeer($torrentId, $peerId)` | Remove a peer (a `stopped` event) |
-| `getPeer($torrentId, $peerId)` | One peer's stored state, or null |
-| `getPeersForAnnounce($torrentId, $excludePeerId, $isSeeder, $limit)` | Peer list for a response |
+| `lookup($torrentId, $peerId, $userId)` | Read a peer once: its baseline and where it came from, as a `PeerLookup` |
+| `upsertPeer(..., lookup: $lookup)` | Add or update a peer; returns deltas, the interval and the baseline used |
+| `removePeer($torrentId, $peerId)` | Remove a peer (a `stopped` event); returns the record removed |
+| `find($torrentId, $peerId)` | The stored record, whatever its age or owner |
+| `getPeer($torrentId, $peerId)` | A live peer's record, or null |
+| `livePeers($torrentId)` | Every live peer on a torrent, keyed by peer_id (one `HGETALL`) |
+| `getPeersForAnnounce($torrentId, $excludePeerId, $isSeeder, $limit, $livePeers)` | Peer list for a response |
 | `getSeeders($torrentId)` / `getLeechers($torrentId)` | Swarm counters |
 | `getSwarmStats($torrentId)` | Totals plus both counters, for anti-cheat |
-| `getUserPeerCountForTorrent($userId, $torrentId)` | Per-user connection limiting |
-| `getIpPeerCount($ip)` | Per-IP connection limiting |
+| `getUserPeerCountForTorrent($userId, $torrentId, $livePeers)` | A member's live peers on a torrent |
+| `getIpSessionCount($ip)` | Sessions (torrent, peer_id) in an IP's set; includes expired ones until the sweep |
 | `cleanupExpiredPeers($torrentId)` | Sweep expired peers, returns the count removed |
+| `retainBaselinesFor($seconds)` | Keep expired peers' records as baselines (private trackers) |
+| `resolveBaselineUsing($resolver)` | A durable fallback for a lost baseline |
+| `withPeerLock($torrentId, $peerId, $work)` | Run `$work` holding the peer's lock; null if another holder kept it (a crediting tracker handles one peer's announces one at a time) |
+| `peersOfUser($userId)` | A member's live peers on every torrent, with their records (one pipelined read) |
+
+#### One read, shared
+
+An announce is judged (anti-cheat) and credited against a baseline: the counters the
+peer last reported. `lookup()` reads it once, and the tracker passes the same
+`PeerLookup` to its checks and to `upsertPeer()`. A speed check can therefore never pass
+against one baseline while the credit is computed against another.
+
+A `PeerLookup` answers two separate questions. `stored` is whatever sits in the hash
+under that peer_id, whoever owns it and however old; it decides the swarm bookkeeping.
+`baseline` is what *this member's* announce may be diffed against: only this member's
+record (a peer_id is the client's choice, not an identity), from the swarm, a retained
+record, or the resolver, in that order. `source` says which (`BaselineSource::Swarm`,
+`Retained`, `Recovered`, `None`), and `isLive()` whether the peer is in the swarm now.
+
+`upsertPeer()` returns, alongside the byte deltas:
+
+- `prior_up` and `prior_down`: the baseline the deltas were diffed against, or null;
+- `prior_at`: when the interval this announce closes began, or null;
+- `prior_left`: the peer's `left` then (0 means it was seeding);
+- `interval_seconds`: the interval, capped at `peer_expiry`;
+- `baseline_source`, `was_existing` and `baseline_recovered`.
+
+A counter that goes *backwards* means the client restarted under the same peer_id and
+is counting from zero again, so the delta is the reported figure, not zero.
 
 `getPeersForAnnounce()` filters by what the requester is: a seeder is handed **leechers
 only**, since two seeders have nothing to exchange, while a leecher gets everyone. Expired
@@ -190,33 +233,34 @@ at `$limit`, so a swarm larger than the limit hands out a different selection ea
 Pass `userId: null` for a peer with no account (hound does); the per-user keys are not
 maintained for it. `userId: 0` is treated as a real user id.
 
-#### The baseline resolver
+#### Retained baselines and the resolver
 
-The one piece of `PeerService` worth understanding before you build on it.
+When the swarm hash has no record of a peer, that is either a genuinely new peer or one
+whose record is gone. Assuming "new" in the second case credits zero for everything it
+transferred since its last announce. Two seams cover it, consulted in this order.
 
-Byte deltas are computed against the peer's previous cumulative counters, which normally
-live in Redis. When Redis has no record of a peer, that is **two different situations
-which look identical from inside the service**: a genuinely new peer, or a peer whose
-state Redis lost. Assuming "new" in the second case silently credits zero for everything
-transferred since that peer's last announce.
+**`retainBaselinesFor($seconds)`.** The sweep moves an expired peer's record into
+`gone:{torrent}` instead of deleting it, and keeps it for that long after its last
+announce. A member who comes back without having sent `stopped` (client killed, machine
+off, network gone) is then credited what they moved in between. The record is used once
+and deleted. A `stopped` peer is never retained, because `stopped` closes the session.
+Bloodhound sets this; hound does not.
 
-`resolveBaselineUsing()` lets a tracker supply a durable fallback, consulted only when
-Redis comes up empty:
+**`resolveBaselineUsing()`** supplies a durable fallback, consulted only when the swarm and
+the retained records both miss. It is told the announcing user, and may answer `left` and
+`last_action` (a Unix timestamp) as well, which give the recovered interval its start:
 
 ```php
-$peerService->resolveBaselineUsing(function (int $torrentId, string $peerId): ?array {
+$peerService->resolveBaselineUsing(function (int $torrentId, string $peerId, ?int $userId): ?array {
     // Look the peer's last known totals up in your own durable record.
     // Return null when it genuinely has no history.
-    return ['uploaded' => $row->uploaded, 'downloaded' => $row->downloaded];
+    return ['uploaded' => $row->uploaded, 'downloaded' => $row->downloaded,
+            'left' => $row->left, 'last_action' => $row->created_at->getTimestamp()];
 });
 ```
 
-Returning `null` is the correct answer for a first announce — a peer with no history has
+Returning `null` is the correct answer for a first announce: a peer with no history has
 no baseline, and inventing one is worse than admitting there isn't one.
-
-Bloodhound wires this to its announce ledger, which is how a Redis restart stops costing
-users their credit. Hound leaves it unset: a public tracker credits nobody, so there is
-nothing to lose. If you write your own tracker package and track bytes, wire it.
 
 ### BlockBrowsers
 
@@ -249,7 +293,7 @@ package; per-tracker settings live in `config/bloodhound.php` or `config/hound.p
 |-----|---------|-------------|
 | `announce_interval` | `1800` | Seconds between announces (sent to clients) |
 | `min_announce_interval` | `300` | Minimum interval clients are told to respect |
-| `peer_expiry` | `3600` | Seconds before an inactive peer is dropped |
+| `peer_expiry` | `3600` | Seconds before an inactive peer is dropped; also the cap on one announce's interval |
 
 ```env
 THREEPIO_ANNOUNCE_INTERVAL=1800
@@ -280,9 +324,11 @@ peers:{torrent_id}                 hash of peer_id => peer data
 torrent:{torrent_id}:seeders       counter
 torrent:{torrent_id}:leechers      counter
 user:{user_id}:peers               set of "torrent_id:peer_id"
-ip:{ip}:peers                      set of peer_ids
+ip:{ip}:sessions                   set of "torrent_id:peer_id", TTL 2 x peer_expiry
+gone:{torrent_id}                  hash of peer_id => retained record, TTL the retention
 swarm:{torrent_id}:uploaded        total bytes up
 swarm:{torrent_id}:downloaded      total bytes down
+lock:{torrent_id}:{hex peer_id}    withPeerLock()'s lock, expires after 5 s
 ```
 
 Give the tracker its own Redis database or prefix if the instance is shared with cache or

@@ -228,7 +228,7 @@ describe('peer selection and expiry (#10804)', function () {
 
         $this->peers->cleanupExpiredPeers(1);
 
-        expect($this->peers->getIpPeerCount('10.0.0.1'))->toBe(0);
+        expect($this->peers->getIpSessionCount('10.0.0.1'))->toBe(0);
     });
 
     test('per-IP and per-user sets rebuild from the next announce after being cleared', function () {
@@ -236,11 +236,11 @@ describe('peer selection and expiry (#10804)', function () {
 
         $redis = Redis::connection(config('threepio.redis.connection', 'default'));
         $prefix = config('threepio.redis.prefix', 'marque:');
-        $redis->del($prefix.'ip:10.0.0.1:peers', $prefix.'user:1:peers');
+        $redis->del($prefix.'ip:10.0.0.1:sessions', $prefix.'user:1:peers');
 
         addPeer($this->peers, 1, '-qB4210-aaaaaaaaaaaa'); // its next announce
 
-        expect($this->peers->getIpPeerCount('10.0.0.1'))->toBe(1)
+        expect($this->peers->getIpSessionCount('10.0.0.1'))->toBe(1)
             ->and($this->peers->getUserPeerCountForTorrent(1, 1))->toBe(1);
     });
 
@@ -252,8 +252,8 @@ describe('peer selection and expiry (#10804)', function () {
             uploaded: 0, downloaded: 0, left: 0, userAgent: 'test', isSeeder: true,
         );
 
-        expect($this->peers->getIpPeerCount('10.0.0.1'))->toBe(0)
-            ->and($this->peers->getIpPeerCount('10.0.0.2'))->toBe(1);
+        expect($this->peers->getIpSessionCount('10.0.0.1'))->toBe(0)
+            ->and($this->peers->getIpSessionCount('10.0.0.2'))->toBe(1);
     });
 
     test('the sweep recounts counters that drifted from the peers actually present', function () {
@@ -281,5 +281,65 @@ describe('peer selection and expiry (#10804)', function () {
         expect($this->peers->getSeeders(2))->toBe(0)
             ->and($redis->exists($prefix.'torrent:2:seeders'))->toBe(0)
             ->and($redis->exists($prefix.'torrent:3:seeders'))->toBe(0);
+    });
+});
+
+// Job #193 (D8): a member's live sessions, for the screen that lets them end
+// one. Read from their peer set, and checked against the swarm hash, since the
+// set is bookkeeping and the hash is the record.
+describe('a member\'s peers', function () {
+    function memberPeer(PeerService $peers, int $torrentId, string $peerId, int $userId, string $ip = '10.0.0.1'): void
+    {
+        $peers->upsertPeer(
+            torrentId: $torrentId, peerId: $peerId, userId: $userId, ip: $ip, port: 51413,
+            uploaded: 5, downloaded: 7, left: 0, userAgent: 'qBittorrent/4.5.0', isSeeder: true,
+        );
+    }
+
+    test('lists the member\'s live peers on every torrent, with their records', function () {
+        memberPeer($this->peers, 1, '-qB4210-aaaaaaaaaaaa', 1);
+        memberPeer($this->peers, 2, '-qB4210-bbbbbbbbbbbb', 1, '10.0.0.2');
+        memberPeer($this->peers, 1, '-qB4210-cccccccccccc', 2);
+
+        $mine = collect($this->peers->peersOfUser(1))->sortBy('torrent_id')->values();
+
+        expect($mine)->toHaveCount(2)
+            ->and($mine[0]['torrent_id'])->toBe(1)
+            ->and($mine[0]['peer_id'])->toBe('-qB4210-aaaaaaaaaaaa')
+            ->and($mine[0]['peer']['uploaded'])->toBe(5)
+            ->and($mine[1]['torrent_id'])->toBe(2)
+            ->and($mine[1]['peer']['ip'])->toBe('10.0.0.2');
+    });
+
+    // BEP 3 lets a peer ID be any 20 bytes, a colon included, and the set
+    // member is "{torrent}:{peer_id}".
+    test('keeps a binary peer ID, colons and all, intact', function () {
+        $peerId = "-XX0001-\x00\xff:\x3a\x80abcdefgh";
+        memberPeer($this->peers, 7, $peerId, 1);
+
+        $mine = $this->peers->peersOfUser(1);
+
+        expect($mine)->toHaveCount(1)
+            ->and($mine[0]['torrent_id'])->toBe(7)
+            ->and($mine[0]['peer_id'])->toBe($peerId);
+    });
+
+    test('leaves out a peer that has expired, or gone', function () {
+        memberPeer($this->peers, 1, '-qB4210-aaaaaaaaaaaa', 1);
+        memberPeer($this->peers, 2, '-qB4210-bbbbbbbbbbbb', 1);
+        backdatePeer(1, '-qB4210-aaaaaaaaaaaa');
+        $this->peers->removePeer(2, '-qB4210-bbbbbbbbbbbb');
+
+        expect($this->peers->peersOfUser(1))->toBe([]);
+    });
+
+    // A set member left behind, pointing at a record another member now owns
+    // under the same peer ID, is not this member's session.
+    test('leaves out a record another member owns', function () {
+        memberPeer($this->peers, 1, '-qB4210-aaaaaaaaaaaa', 2);
+        Redis::connection(config('threepio.redis.connection', 'default'))
+            ->sadd(config('threepio.redis.prefix', 'marque:').'user:1:peers', '1:-qB4210-aaaaaaaaaaaa');
+
+        expect($this->peers->peersOfUser(1))->toBe([]);
     });
 });
