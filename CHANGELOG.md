@@ -7,6 +7,17 @@ follows the suite's [VERSIONING.md](../../VERSIONING.md). This changelog starts
 2026-08-26 — earlier releases aren't backfilled; see `git log` or
 [docs/upgrading.md](../../docs/upgrading.md) for the story up to this point.
 
+## [4.1.0] — 2026-10-21
+
+> A valid .torrent for your own test suite: `Testing\FakeTorrent`, private by default, with a distinct info_hash each time.
+
+### Added
+
+- **`Testing\FakeTorrent`**, a valid .torrent for consumer test suites (#11070). It is
+  private by default and gives a distinct info_hash per `make()`. It returns the bytes, the
+  info_hash as trove stores it, and an `UploadedFile`. Single-file or multi-file, named,
+  sized, public, or pointed at any announce URL.
+
 ## [4.0.0] — 2026-10-20
 
 > Peer storage made to be credited against: one read of a peer feeds anti-cheat and credit, reads never mutate, a member's baseline outlives the swarm when asked to, the per-IP count is of sessions, binary peer IDs are recorded, and announce and scrape parameters come from the raw query string.

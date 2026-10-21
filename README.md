@@ -89,6 +89,7 @@ announce ledger. See
 | `Support\RawQuery` | The announce or scrape query string as the client sent it: read `info_hash` and `peer_id` from it, never `$request->get()` |
 | `Enums\AnnounceEvent` | `started`, `completed`, `stopped` |
 | `Http\Middleware\BlockBrowsers` | Rejects web browsers from tracker endpoints |
+| `Testing\FakeTorrent` | A valid .torrent for your tests: bytes, info_hash and an `UploadedFile` |
 
 ### Bencode
 
@@ -281,6 +282,33 @@ AnnounceEvent::tryFrom($request->get('event'));  // null for a regular announce
 
 Three cases — `Started`, `Completed`, `Stopped`. A regular interval announce sends no
 event at all, so `tryFrom()` returning null is the normal path, not an error.
+
+### FakeTorrent
+
+A valid .torrent for your own test suite. Uploads are checked against the tracker's
+private-flag rule, and downloads parse the stored file. So a fixture of
+`'fake torrent content'`, or a public torrent on a tracker that requires private ones, now
+fails before your test gets to what it is testing.
+
+```php
+use Marque\Threepio\Testing\FakeTorrent;
+
+$torrent = FakeTorrent::make();       // single file, private
+$torrent->bytes();                    // the .torrent file
+$torrent->infoHash();                 // 40 lowercase hex, what trove stores
+$torrent->upload();                   // an UploadedFile for a form or API test
+
+FakeTorrent::make()
+    ->named('Big Buck Bunny')
+    ->size(700 * 1024 * 1024)
+    ->withFiles(['video.mkv' => 700_000, 'subs/en.srt' => 40])   // multi-file instead
+    ->public()
+    ->announce('https://tracker.example/announce');
+```
+
+It is private by default, because a private tracker requires that. Each `make()` has its
+own piece hashes, so two fixtures never share an info_hash. One instance gives the same
+bytes every time it is read. Modifiers return a copy and leave the original unchanged.
 
 ## Configuration
 
