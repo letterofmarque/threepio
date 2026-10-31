@@ -56,8 +56,8 @@ describe('merge', function () {
         $second = PeerAddresses::merge(['ip' => '203.0.113.7', 'last_action' => 1000] + $first, '2001:db8::1', null, null, 1100, 3600);
 
         expect($second)->toBe([
-            'ipv4' => '203.0.113.7', 'ipv4_at' => 1000, 'ipv4_connected' => true,
-            'ipv6' => '2001:db8::1', 'ipv6_at' => 1100, 'ipv6_connected' => true,
+            'ipv4' => '203.0.113.7', 'ipv4_at' => 1000, 'ipv4_connected_at' => 1000,
+            'ipv6' => '2001:db8::1', 'ipv6_at' => 1100, 'ipv6_connected_at' => 1100,
         ]);
     });
 
@@ -81,7 +81,7 @@ describe('merge', function () {
 
     it('files a mapped connecting address as IPv4', function () {
         expect(PeerAddresses::merge(null, '::ffff:203.0.113.7', null, null, 1000, 3600))
-            ->toMatchArray(['ipv4' => '203.0.113.7', 'ipv4_at' => 1000, 'ipv4_connected' => true, 'ipv6' => null]);
+            ->toMatchArray(['ipv4' => '203.0.113.7', 'ipv4_at' => 1000, 'ipv4_connected_at' => 1000, 'ipv6' => null]);
     });
 
     // Found by the 10.1 docs read-through: an ipv4= over an IPv4 connection
@@ -91,19 +91,53 @@ describe('merge', function () {
         $fields = PeerAddresses::merge(null, '198.51.100.9', '203.0.113.7', null, 1000, 3600);
 
         expect($fields['ipv4'])->toBe('198.51.100.9')
-            ->and($fields['ipv4_connected'])->toBeTrue();
+            ->and($fields['ipv4_connected_at'])->toBe(1000);
     });
 
     it('marks an announced address as not connected from', function () {
         $fields = PeerAddresses::merge(null, '2001:db8::1', '203.0.113.7', null, 1000, 3600);
 
-        expect($fields)->toMatchArray(['ipv4' => '203.0.113.7', 'ipv4_connected' => false, 'ipv6_connected' => true]);
+        expect($fields)->toMatchArray(['ipv4' => '203.0.113.7', 'ipv4_connected_at' => null, 'ipv6_connected_at' => 1000]);
     });
 
-    it('keeps an address connected from when the client announces the same one', function () {
+    it('keeps an address connected from when the client announces the same one, without refreshing it', function () {
         $stored = ['ip' => '203.0.113.7', 'last_action' => 1000];
 
-        expect(PeerAddresses::merge($stored, '2001:db8::1', '203.0.113.7', null, 1100, 3600)['ipv4_connected'])->toBeTrue();
+        expect(PeerAddresses::merge($stored, '2001:db8::1', '203.0.113.7', null, 1100, 3600))
+            ->toMatchArray(['ipv4_at' => 1100, 'ipv4_connected_at' => 1000]);
+    });
+
+    // Found by the 10.1 second read-through: a claim that matched an address
+    // the peer once connected from refreshed it, so a client could keep its
+    // old home address standing as a location by repeating it.
+    it('lets a connection go stale however often the client claims the address', function () {
+        $peer = ['ip' => '203.0.113.7', 'last_action' => 1000];
+
+        foreach ([2000, 3000, 4000, 5000] as $now) {
+            $peer = ['ip' => '2001:db8::1', 'last_action' => $now]
+                + PeerAddresses::merge($peer, '2001:db8::1', '203.0.113.7', null, $now, 3600);
+        }
+
+        expect(PeerAddresses::connected($peer, 5000, 3600)['ipv4'])->toBeNull()
+            ->and(PeerAddresses::of($peer, 5000, 3600)['ipv4'])->toBe('203.0.113.7');
+    });
+
+    it('stops counting the other family as connected from once the peer changes network', function () {
+        $home = ['ip' => '2001:db8:1:2::10', 'last_action' => 1100]
+            + PeerAddresses::merge(['ip' => '203.0.113.7', 'last_action' => 1000], '2001:db8:1:2::10', null, null, 1100, 3600);
+
+        $elsewhere = PeerAddresses::merge($home, '198.51.100.9', null, null, 1200, 3600);
+
+        expect($elsewhere)->toMatchArray(['ipv4_connected_at' => 1200, 'ipv6' => '2001:db8:1:2::10', 'ipv6_connected_at' => null]);
+    });
+
+    it('leaves the other family connected while the peer only alternates families', function () {
+        $peer = ['ip' => '203.0.113.7', 'last_action' => 1000];
+        $peer = ['ip' => '2001:db8:1:2::10', 'last_action' => 1100] + PeerAddresses::merge($peer, '2001:db8:1:2::10', null, null, 1100, 3600);
+        $peer = ['ip' => '203.0.113.7', 'last_action' => 1200] + PeerAddresses::merge($peer, '203.0.113.7', null, null, 1200, 3600);
+        $peer = ['ip' => '2001:db8:1:2::99', 'last_action' => 1300] + PeerAddresses::merge($peer, '2001:db8:1:2::99', null, null, 1300, 3600);
+
+        expect(PeerAddresses::connected($peer, 1300, 3600))->toBe(['ipv4' => '203.0.113.7', 'ipv6' => '2001:db8:1:2::99']);
     });
 });
 

@@ -245,17 +245,24 @@ A dual-stack client announces over IPv4 and IPv6 in turn under one peer ID (libt
 announces once per listen interface). A record with one address would hand the peer out
 only in the family it last used, so each record keeps an `ipv4` and an `ipv6`, each with
 when it was last seen. An announce refreshes the family it arrived over and leaves the
-other alone; a family not seen within `peer_expiry` is dropped as stale. `ip` stays the
+other alone, unless the client announced an address for it; a family not seen within
+`peer_expiry` is dropped as stale. `ip` stays the
 address the last announce came from.
 
 `upsertPeer()` also takes `ipv4` and `ipv6`: addresses the client said it has (BEP 7's
 `ipv4=` and `ipv6=`). Each fills only the family the announce didn't arrive over. The
 address the client connected from is the one thing the tracker saw for itself, and a
-claim never replaces it. Each family also records whether a connection came from it
-(`ipv4_connected`, `ipv6_connected`). `PeerAddresses::of()` gives every address the peer
-can be reached at. `PeerAddresses::connected()` gives only the ones it connected from:
-judge location by those, because a client can announce any address. threepio doesn't decide whether to
-believe them; the tracker vets them first with `PeerAddresses::announced($value, $family,
+claim never replaces it. Each family also keeps when a connection last came from it
+(`ipv4_connected_at`, `ipv6_connected_at`). Only a connection sets that: a claim never
+does, so repeating an address the peer once connected from doesn't keep it current.
+When the connecting family changes network (another IPv4 address, another IPv6 /64),
+the peer has moved, and the other family's address stops counting as connected from:
+it was seen where the peer used to be.
+
+`PeerAddresses::of()` gives every address the peer can be reached at.
+`PeerAddresses::connected()` gives only the ones it connected from within `peer_expiry`,
+so judge location by those: a client can announce any address. threepio doesn't decide
+whether to believe the announced ones; the tracker vets them first with `PeerAddresses::announced($value, $family,
 $publicOnly)`, which takes an address or an endpoint (`[2001:db8::1]:6881`, port dropped),
 refuses the wrong family, and with `$publicOnly` refuses private and reserved ranges.
 `getPeersForAnnounce()` returns each peer's `ipv4` and `ipv6` for `TrackerResponse` to

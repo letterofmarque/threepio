@@ -21,8 +21,8 @@ follows the suite's [VERSIONING.md](../../VERSIONING.md). This changelog starts
 - **A dual-stack peer was handed out in one family at a time.** libtorrent announces over
   IPv4 and IPv6 in turn under one peer ID, and the record kept only the latest address. A
   peer's record now keeps an `ipv4` and an `ipv6`, each with when it was last seen. An
-  announce refreshes its own family and leaves the other alone, and a family not seen
-  within `peer_expiry` is dropped. Records written before this have only `ip`, which is read
+  announce refreshes its own family and leaves the other alone (unless the client announced
+  an address for it), and a family not seen within `peer_expiry` is dropped. Records written before this have only `ip`, which is read
   as its own family, so nothing needs migrating.
 
 ### Added
@@ -31,7 +31,10 @@ follows the suite's [VERSIONING.md](../../VERSIONING.md). This changelog starts
   `ipv6=` value: right family, optionally public only, an endpoint's port dropped),
   `merge()`, `of()` (every address a peer can be reached at) and `connected()` (only those
   it connected from, for judging location). An announced address fills only the family
-  the announce didn't arrive over, and never replaces the connecting address.
+  the announce didn't arrive over, and never replaces the connecting address. A record
+  keeps `ipv4_connected_at` and `ipv6_connected_at`, which only a connection sets. A peer
+  that changes network in its connecting family stops counting the other family as
+  connected from.
 - **`PeerService::upsertPeer()` takes `ipv4` and `ipv6`**: addresses the client announced,
   already vetted by the tracker. Both are optional and default to null.
 - **`getPeersForAnnounce()` returns each peer's `ipv4` and `ipv6`.**
