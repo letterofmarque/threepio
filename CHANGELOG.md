@@ -29,7 +29,9 @@ follows the suite's [VERSIONING.md](../../VERSIONING.md). This changelog starts
 
 - **`Support\PeerAddresses`**: `normalise()`, `family()`, `announced()` (vets an `ipv4=` or
   `ipv6=` value: right family, optionally public only, an endpoint's port dropped),
-  `merge()` and `of()`.
+  `merge()`, `of()` (every address a peer can be reached at) and `connected()` (only those
+  it connected from, for judging location). An announced address fills only the family
+  the announce didn't arrive over, and never replaces the connecting address.
 - **`PeerService::upsertPeer()` takes `ipv4` and `ipv6`**: addresses the client announced,
   already vetted by the tracker. Both are optional and default to null.
 - **`getPeersForAnnounce()` returns each peer's `ipv4` and `ipv6`.**

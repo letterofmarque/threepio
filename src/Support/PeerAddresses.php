@@ -93,35 +93,57 @@ final class PeerAddresses
     /**
      * The address fields a peer's record holds after an announce.
      *
-     * Starts from the stored record's families still fresh at $now, then the
-     * address the announce came from, then what it announced: the newest word
-     * on each family wins.
+     * Starts from the stored record's families still fresh at $now, then what
+     * the client announced, then the address the announce came from.
+     *
+     * An announced address fills only the family the announce did not arrive
+     * over: the connecting address is the one thing the tracker saw for
+     * itself, and a claim never replaces it. Each family also records whether
+     * a connection was seen from it (`ipv4_connected`, `ipv6_connected`).
+     * An announced address is where a peer can be reached, never proof of
+     * where it is, so anything that judges location reads connected() only.
      *
      * @param  array<string, mixed>|null  $stored  this peer's record, if it has one
-     * @return array{ipv4: ?string, ipv4_at: ?int, ipv6: ?string, ipv6_at: ?int}
+     * @return array{ipv4: ?string, ipv4_at: ?int, ipv4_connected: bool, ipv6: ?string, ipv6_at: ?int, ipv6_connected: bool}
      */
     public static function merge(?array $stored, string $ip, ?string $ipv4, ?string $ipv6, int $now, int $expiry): array
     {
-        $fields = ['ipv4' => null, 'ipv4_at' => null, 'ipv6' => null, 'ipv6_at' => null];
+        $fields = [
+            'ipv4' => null, 'ipv4_at' => null, 'ipv4_connected' => false,
+            'ipv6' => null, 'ipv6_at' => null, 'ipv6_connected' => false,
+        ];
 
         if ($stored !== null) {
             foreach ([4, 6] as $family) {
-                [$address, $at] = self::stored($stored, $family);
+                [$address, $at, $connected] = self::stored($stored, $family);
 
                 if ($address !== null && $now - $at <= $expiry) {
                     $fields["ipv{$family}"] = $address;
                     $fields["ipv{$family}_at"] = $at;
+                    $fields["ipv{$family}_connected"] = $connected;
                 }
             }
         }
 
-        foreach ([self::normalise($ip), $ipv4, $ipv6] as $address) {
-            $family = $address === null ? null : self::family($address);
+        $ip = self::normalise($ip);
+        $connectedFamily = self::family($ip);
 
-            if ($family !== null) {
-                $fields["ipv{$family}"] = $address;
-                $fields["ipv{$family}_at"] = $now;
+        foreach ([4 => $ipv4, 6 => $ipv6] as $family => $address) {
+            if ($address === null || $family === $connectedFamily || self::family($address) !== $family) {
+                continue;
             }
+
+            // The same address a connection was already seen from stays a
+            // connected one.
+            $fields["ipv{$family}_connected"] = $fields["ipv{$family}_connected"] && $fields["ipv{$family}"] === $address;
+            $fields["ipv{$family}"] = $address;
+            $fields["ipv{$family}_at"] = $now;
+        }
+
+        if ($connectedFamily !== null) {
+            $fields["ipv{$connectedFamily}"] = $ip;
+            $fields["ipv{$connectedFamily}_at"] = $now;
+            $fields["ipv{$connectedFamily}_connected"] = true;
         }
 
         return $fields;
@@ -153,21 +175,51 @@ final class PeerAddresses
     }
 
     /**
+     * The addresses a stored peer was seen connecting from, each null when it
+     * has none fresh at $now: what a tracker may judge its location by.
+     *
+     * An address it only announced is left out, since a client can announce
+     * any address it likes. A record written before this was kept has only
+     * `ip`, which it connected from.
+     *
      * @param  array<string, mixed>  $peer
-     * @return array{0: ?string, 1: int}
+     * @return array{ipv4: ?string, ipv6: ?string}
+     */
+    public static function connected(array $peer, int $now, int $expiry): array
+    {
+        $addresses = ['ipv4' => null, 'ipv6' => null];
+
+        foreach ([4, 6] as $family) {
+            [$address, $at, $connected] = self::stored($peer, $family);
+
+            if ($address !== null && $connected && $now - $at <= $expiry) {
+                $addresses["ipv{$family}"] = $address;
+            }
+        }
+
+        return $addresses;
+    }
+
+    /**
+     * @param  array<string, mixed>  $peer
+     * @return array{0: ?string, 1: int, 2: bool}
      */
     private static function stored(array $peer, int $family): array
     {
         if (array_key_exists("ipv{$family}", $peer)) {
             $address = $peer["ipv{$family}"];
 
-            return [$address === null ? null : (string) $address, (int) ($peer["ipv{$family}_at"] ?? $peer['last_action'] ?? 0)];
+            return [
+                $address === null ? null : (string) $address,
+                (int) ($peer["ipv{$family}_at"] ?? $peer['last_action'] ?? 0),
+                (bool) ($peer["ipv{$family}_connected"] ?? true),
+            ];
         }
 
         $ip = isset($peer['ip']) ? self::normalise((string) $peer['ip']) : null;
 
         return $ip !== null && self::family($ip) === $family
-            ? [$ip, (int) ($peer['last_action'] ?? 0)]
-            : [null, 0];
+            ? [$ip, (int) ($peer['last_action'] ?? 0), true]
+            : [null, 0, false];
     }
 }

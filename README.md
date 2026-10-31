@@ -249,7 +249,12 @@ other alone; a family not seen within `peer_expiry` is dropped as stale. `ip` st
 address the last announce came from.
 
 `upsertPeer()` also takes `ipv4` and `ipv6`: addresses the client said it has (BEP 7's
-`ipv4=` and `ipv6=`), which go in their family at once. threepio doesn't decide whether to
+`ipv4=` and `ipv6=`). Each fills only the family the announce didn't arrive over. The
+address the client connected from is the one thing the tracker saw for itself, and a
+claim never replaces it. Each family also records whether a connection came from it
+(`ipv4_connected`, `ipv6_connected`). `PeerAddresses::of()` gives every address the peer
+can be reached at. `PeerAddresses::connected()` gives only the ones it connected from:
+judge location by those, because a client can announce any address. threepio doesn't decide whether to
 believe them; the tracker vets them first with `PeerAddresses::announced($value, $family,
 $publicOnly)`, which takes an address or an endpoint (`[2001:db8::1]:6881`, port dropped),
 refuses the wrong family, and with `$publicOnly` refuses private and reserved ranges.
