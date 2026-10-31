@@ -99,35 +99,25 @@ final class PeerAddresses
      *
      * An announced address fills only the family the announce did not arrive
      * over: the connecting address is the one thing the tracker saw for
-     * itself, and a claim never replaces it. Each family also keeps when a
-     * connection last came from it (`ipv4_connected_at`, `ipv6_connected_at`).
-     * Only a connection sets that, never a claim, so repeating an address the
-     * peer once connected from doesn't keep it standing for where the peer is.
-     * Anything that judges location reads connected() only.
-     *
-     * A peer whose connecting family changed network (another IPv4 address,
-     * another IPv6 /64) has moved, and the other family's address was seen
-     * where it used to be: it stays reachable but no longer counts as
-     * connected from.
+     * itself, and a claim never replaces it. These are where a peer can be
+     * reached, not where it is: a client can announce any address, and one
+     * peer ID can announce from two places, so nothing here says two
+     * addresses are one machine. Judge location by the record's `ip`.
      *
      * @param  array<string, mixed>|null  $stored  this peer's record, if it has one
-     * @return array{ipv4: ?string, ipv4_at: ?int, ipv4_connected_at: ?int, ipv6: ?string, ipv6_at: ?int, ipv6_connected_at: ?int}
+     * @return array{ipv4: ?string, ipv4_at: ?int, ipv6: ?string, ipv6_at: ?int}
      */
     public static function merge(?array $stored, string $ip, ?string $ipv4, ?string $ipv6, int $now, int $expiry): array
     {
-        $fields = [
-            'ipv4' => null, 'ipv4_at' => null, 'ipv4_connected_at' => null,
-            'ipv6' => null, 'ipv6_at' => null, 'ipv6_connected_at' => null,
-        ];
+        $fields = ['ipv4' => null, 'ipv4_at' => null, 'ipv6' => null, 'ipv6_at' => null];
 
         if ($stored !== null) {
             foreach ([4, 6] as $family) {
-                [$address, $at, $connectedAt] = self::stored($stored, $family);
+                [$address, $at] = self::stored($stored, $family);
 
                 if ($address !== null && $now - $at <= $expiry) {
                     $fields["ipv{$family}"] = $address;
                     $fields["ipv{$family}_at"] = $at;
-                    $fields["ipv{$family}_connected_at"] = $connectedAt !== null && $now - $connectedAt <= $expiry ? $connectedAt : null;
                 }
             }
         }
@@ -136,49 +126,18 @@ final class PeerAddresses
         $connectedFamily = self::family($ip);
 
         foreach ([4 => $ipv4, 6 => $ipv6] as $family => $address) {
-            if ($address === null || $family === $connectedFamily || self::family($address) !== $family) {
-                continue;
+            if ($address !== null && $family !== $connectedFamily && self::family($address) === $family) {
+                $fields["ipv{$family}"] = $address;
+                $fields["ipv{$family}_at"] = $now;
             }
-
-            // A claim of the address a connection already came from leaves
-            // that connection standing, unrefreshed; any other replaces it.
-            if ($fields["ipv{$family}"] !== $address) {
-                $fields["ipv{$family}_connected_at"] = null;
-            }
-
-            $fields["ipv{$family}"] = $address;
-            $fields["ipv{$family}_at"] = $now;
         }
 
         if ($connectedFamily !== null) {
-            $other = $connectedFamily === 4 ? 6 : 4;
-            $previous = $fields["ipv{$connectedFamily}_connected_at"] !== null ? $fields["ipv{$connectedFamily}"] : null;
-
-            if ($previous !== null && self::network($previous) !== self::network($ip)) {
-                $fields["ipv{$other}_connected_at"] = null;
-            }
-
             $fields["ipv{$connectedFamily}"] = $ip;
             $fields["ipv{$connectedFamily}_at"] = $now;
-            $fields["ipv{$connectedFamily}_connected_at"] = $now;
         }
 
         return $fields;
-    }
-
-    /**
-     * The network an address is on: an IPv4 address itself, or an IPv6
-     * address's /64, the block one connection is usually handed.
-     */
-    public static function network(string $ip): string
-    {
-        $packed = @inet_pton(self::normalise($ip));
-
-        if ($packed === false || strlen($packed) !== 16) {
-            return self::normalise($ip);
-        }
-
-        return bin2hex(substr($packed, 0, 8)).'::/64';
     }
 
     /**
@@ -207,51 +166,21 @@ final class PeerAddresses
     }
 
     /**
-     * The addresses a stored peer was seen connecting from, each null when it
-     * has none fresh at $now: what a tracker may judge its location by.
-     *
-     * An address it only announced is left out, since a client can announce
-     * any address it likes. A record written before this was kept has only
-     * `ip`, which it connected from.
-     *
      * @param  array<string, mixed>  $peer
-     * @return array{ipv4: ?string, ipv6: ?string}
-     */
-    public static function connected(array $peer, int $now, int $expiry): array
-    {
-        $addresses = ['ipv4' => null, 'ipv6' => null];
-
-        foreach ([4, 6] as $family) {
-            [$address, , $connectedAt] = self::stored($peer, $family);
-
-            if ($address !== null && $connectedAt !== null && $now - $connectedAt <= $expiry) {
-                $addresses["ipv{$family}"] = $address;
-            }
-        }
-
-        return $addresses;
-    }
-
-    /**
-     * @param  array<string, mixed>  $peer
-     * @return array{0: ?string, 1: int, 2: ?int}
+     * @return array{0: ?string, 1: int}
      */
     private static function stored(array $peer, int $family): array
     {
         if (array_key_exists("ipv{$family}", $peer)) {
             $address = $peer["ipv{$family}"];
 
-            return [
-                $address === null ? null : (string) $address,
-                (int) ($peer["ipv{$family}_at"] ?? $peer['last_action'] ?? 0),
-                isset($peer["ipv{$family}_connected_at"]) ? (int) $peer["ipv{$family}_connected_at"] : null,
-            ];
+            return [$address === null ? null : (string) $address, (int) ($peer["ipv{$family}_at"] ?? $peer['last_action'] ?? 0)];
         }
 
         $ip = isset($peer['ip']) ? self::normalise((string) $peer['ip']) : null;
 
         return $ip !== null && self::family($ip) === $family
-            ? [$ip, (int) ($peer['last_action'] ?? 0), (int) ($peer['last_action'] ?? 0)]
-            : [null, 0, null];
+            ? [$ip, (int) ($peer['last_action'] ?? 0)]
+            : [null, 0];
     }
 }

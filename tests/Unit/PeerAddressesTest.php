@@ -55,10 +55,7 @@ describe('merge', function () {
         $first = PeerAddresses::merge(null, '203.0.113.7', null, null, 1000, 3600);
         $second = PeerAddresses::merge(['ip' => '203.0.113.7', 'last_action' => 1000] + $first, '2001:db8::1', null, null, 1100, 3600);
 
-        expect($second)->toBe([
-            'ipv4' => '203.0.113.7', 'ipv4_at' => 1000, 'ipv4_connected_at' => 1000,
-            'ipv6' => '2001:db8::1', 'ipv6_at' => 1100, 'ipv6_connected_at' => 1100,
-        ]);
+        expect($second)->toBe(['ipv4' => '203.0.113.7', 'ipv4_at' => 1000, 'ipv6' => '2001:db8::1', 'ipv6_at' => 1100]);
     });
 
     it('drops a family not seen within the expiry', function () {
@@ -67,10 +64,16 @@ describe('merge', function () {
         expect(PeerAddresses::merge($stored, '2001:db8::1', null, null, 5000, 3600)['ipv4'])->toBeNull();
     });
 
-    it('takes announced addresses over stored ones', function () {
+    it('takes an announced address for the other family over a stored one', function () {
         $stored = ['ip' => '2001:db8::1', 'last_action' => 1000, 'ipv4' => '203.0.113.7', 'ipv4_at' => 1000, 'ipv6' => '2001:db8::1', 'ipv6_at' => 1000];
 
         expect(PeerAddresses::merge($stored, '2001:db8::1', '198.51.100.9', null, 1100, 3600)['ipv4'])->toBe('198.51.100.9');
+    });
+
+    // Found by the 10.1 docs read-through: an ipv4= over an IPv4 connection
+    // replaced the connecting address.
+    it('never lets an announced address replace the one the announce came from', function () {
+        expect(PeerAddresses::merge(null, '198.51.100.9', '203.0.113.7', null, 1000, 3600)['ipv4'])->toBe('198.51.100.9');
     });
 
     it('reads a record written before families were kept by its ip', function () {
@@ -81,78 +84,7 @@ describe('merge', function () {
 
     it('files a mapped connecting address as IPv4', function () {
         expect(PeerAddresses::merge(null, '::ffff:203.0.113.7', null, null, 1000, 3600))
-            ->toMatchArray(['ipv4' => '203.0.113.7', 'ipv4_at' => 1000, 'ipv4_connected_at' => 1000, 'ipv6' => null]);
-    });
-
-    // Found by the 10.1 docs read-through: an ipv4= over an IPv4 connection
-    // replaced the connecting address, so a member sharing their account
-    // could claim the owner's address and be "at the same place".
-    it('never lets an announced address replace the one the announce came from', function () {
-        $fields = PeerAddresses::merge(null, '198.51.100.9', '203.0.113.7', null, 1000, 3600);
-
-        expect($fields['ipv4'])->toBe('198.51.100.9')
-            ->and($fields['ipv4_connected_at'])->toBe(1000);
-    });
-
-    it('marks an announced address as not connected from', function () {
-        $fields = PeerAddresses::merge(null, '2001:db8::1', '203.0.113.7', null, 1000, 3600);
-
-        expect($fields)->toMatchArray(['ipv4' => '203.0.113.7', 'ipv4_connected_at' => null, 'ipv6_connected_at' => 1000]);
-    });
-
-    it('keeps an address connected from when the client announces the same one, without refreshing it', function () {
-        $stored = ['ip' => '203.0.113.7', 'last_action' => 1000];
-
-        expect(PeerAddresses::merge($stored, '2001:db8::1', '203.0.113.7', null, 1100, 3600))
-            ->toMatchArray(['ipv4_at' => 1100, 'ipv4_connected_at' => 1000]);
-    });
-
-    // Found by the 10.1 second read-through: a claim that matched an address
-    // the peer once connected from refreshed it, so a client could keep its
-    // old home address standing as a location by repeating it.
-    it('lets a connection go stale however often the client claims the address', function () {
-        $peer = ['ip' => '203.0.113.7', 'last_action' => 1000];
-
-        foreach ([2000, 3000, 4000, 5000] as $now) {
-            $peer = ['ip' => '2001:db8::1', 'last_action' => $now]
-                + PeerAddresses::merge($peer, '2001:db8::1', '203.0.113.7', null, $now, 3600);
-        }
-
-        expect(PeerAddresses::connected($peer, 5000, 3600)['ipv4'])->toBeNull()
-            ->and(PeerAddresses::of($peer, 5000, 3600)['ipv4'])->toBe('203.0.113.7');
-    });
-
-    it('stops counting the other family as connected from once the peer changes network', function () {
-        $home = ['ip' => '2001:db8:1:2::10', 'last_action' => 1100]
-            + PeerAddresses::merge(['ip' => '203.0.113.7', 'last_action' => 1000], '2001:db8:1:2::10', null, null, 1100, 3600);
-
-        $elsewhere = PeerAddresses::merge($home, '198.51.100.9', null, null, 1200, 3600);
-
-        expect($elsewhere)->toMatchArray(['ipv4_connected_at' => 1200, 'ipv6' => '2001:db8:1:2::10', 'ipv6_connected_at' => null]);
-    });
-
-    it('leaves the other family connected while the peer only alternates families', function () {
-        $peer = ['ip' => '203.0.113.7', 'last_action' => 1000];
-        $peer = ['ip' => '2001:db8:1:2::10', 'last_action' => 1100] + PeerAddresses::merge($peer, '2001:db8:1:2::10', null, null, 1100, 3600);
-        $peer = ['ip' => '203.0.113.7', 'last_action' => 1200] + PeerAddresses::merge($peer, '203.0.113.7', null, null, 1200, 3600);
-        $peer = ['ip' => '2001:db8:1:2::99', 'last_action' => 1300] + PeerAddresses::merge($peer, '2001:db8:1:2::99', null, null, 1300, 3600);
-
-        expect(PeerAddresses::connected($peer, 1300, 3600))->toBe(['ipv4' => '203.0.113.7', 'ipv6' => '2001:db8:1:2::99']);
-    });
-});
-
-describe('connected', function () {
-    it('leaves out an address the peer only announced', function () {
-        $peer = ['ip' => '2001:db8::1', 'last_action' => 1000]
-            + PeerAddresses::merge(null, '2001:db8::1', '203.0.113.7', null, 1000, 3600);
-
-        expect(PeerAddresses::connected($peer, 1000, 3600))->toBe(['ipv4' => null, 'ipv6' => '2001:db8::1'])
-            ->and(PeerAddresses::of($peer, 1000, 3600))->toBe(['ipv4' => '203.0.113.7', 'ipv6' => '2001:db8::1']);
-    });
-
-    it('counts an old record\'s ip as connected from', function () {
-        expect(PeerAddresses::connected(['ip' => '203.0.113.7', 'last_action' => 1000], 1000, 3600))
-            ->toBe(['ipv4' => '203.0.113.7', 'ipv6' => null]);
+            ->toBe(['ipv4' => '203.0.113.7', 'ipv4_at' => 1000, 'ipv6' => null, 'ipv6_at' => null]);
     });
 });
 

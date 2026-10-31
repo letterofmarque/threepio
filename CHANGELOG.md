@@ -9,7 +9,7 @@ follows the suite's [VERSIONING.md](../../VERSIONING.md). This changelog starts
 
 ## [4.2.0] — 2026-11-01
 
-> IPv6 peers are handed out, in `peers6` (BEP 7), and a dual-stack peer keeps an address in each family, so it reaches peers on both.
+> IPv6 peers are handed out, in `peers6` (BEP 7), and a dual-stack peer keeps an address in each family, so compact responses carry it in both.
 
 ### Fixed
 
@@ -18,7 +18,7 @@ follows the suite's [VERSIONING.md](../../VERSIONING.md). This changelog starts
   Compact responses now carry IPv6 peers in `peers6`, 18 bytes each, beside the IPv4 ones in
   `peers`. An IPv4-mapped address (`::ffff:a.b.c.d`) goes in `peers`. `peers6` is left out
   when there are no IPv6 peers, so an IPv4-only response is unchanged.
-- **A dual-stack peer was handed out in one family at a time.** libtorrent announces over
+- **A dual-stack peer was handed out in one family at a time** (compact responses). libtorrent announces over
   IPv4 and IPv6 in turn under one peer ID, and the record kept only the latest address. A
   peer's record now keeps an `ipv4` and an `ipv6`, each with when it was last seen. An
   announce refreshes its own family and leaves the other alone (unless the client announced
@@ -29,12 +29,9 @@ follows the suite's [VERSIONING.md](../../VERSIONING.md). This changelog starts
 
 - **`Support\PeerAddresses`**: `normalise()`, `family()`, `announced()` (vets an `ipv4=` or
   `ipv6=` value: right family, optionally public only, an endpoint's port dropped),
-  `merge()`, `of()` (every address a peer can be reached at) and `connected()` (only those
-  it connected from, for judging location). An announced address fills only the family
-  the announce didn't arrive over, and never replaces the connecting address. A record
-  keeps `ipv4_connected_at` and `ipv6_connected_at`, which only a connection sets. A peer
-  that changes network in its connecting family stops counting the other family as
-  connected from.
+  `merge()` and `of()` (every address a peer can be reached at). An announced address
+  fills only the family the announce didn't arrive over, and never replaces the connecting
+  address. These say where a peer can be reached, not where it is: judge location by `ip`.
 - **`PeerService::upsertPeer()` takes `ipv4` and `ipv6`**: addresses the client announced,
   already vetted by the tracker. Both are optional and default to null.
 - **`getPeersForAnnounce()` returns each peer's `ipv4` and `ipv6`.**
