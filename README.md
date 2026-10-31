@@ -86,6 +86,7 @@ announce ledger. See
 | `Support\TrackerResponse` | Builds bencoded announce, scrape and failure responses |
 | `Services\PeerService` | Redis-backed live peer storage |
 | `Support\PeerLookup` | One read of a peer: its baseline, where it came from, and the credit an announce earns against it |
+| `Support\PeerAddresses` | A peer's addresses, one per family (BEP 7): vetting `ipv4=`/`ipv6=`, keeping both families of a dual-stack peer |
 | `Support\RawQuery` | The announce or scrape query string as the client sent it: read `info_hash` and `peer_id` from it, never `$request->get()` |
 | `Enums\AnnounceEvent` | `started`, `completed`, `stopped` |
 | `Http\Middleware\BlockBrowsers` | Rejects web browsers from tracker endpoints |
@@ -157,9 +158,16 @@ TrackerResponse::error('Torrent not registered');
 body, not a status code — clients expect 200 and will treat a 4xx as a transport problem
 rather than showing your message. That's protocol convention, not an oversight.
 
-Compact peers pack to 6 bytes each (4 IP, 2 port); an unparseable IP is skipped rather
-than corrupting the run. Dictionary format is available for older clients. Scrape takes
-hex info_hashes and converts them back to binary for the response.
+Compact peers go in two strings, by family (BEP 7): IPv4 peers in `peers`, 6 bytes each
+(4 address, 2 port), and IPv6 peers in `peers6`, 18 bytes each (16 and 2). A dual-stack
+peer is in both, and an IPv4-mapped address (`::ffff:1.2.3.4`) counts as IPv4. `peers6` is
+left out when no peer has IPv6, so an IPv4-only swarm's response is the same as before
+4.2. An unparseable address is skipped rather than corrupting the run. Dictionary format
+is available for older clients and lists each peer at the address it last announced
+from. Scrape takes hex info_hashes and converts them back to binary for the response.
+
+Before 4.2, compact packing skipped every IPv6 address: IPv6 peers were recorded and
+handed to nobody.
 
 ### PeerService
 
@@ -185,7 +193,7 @@ because both are safe to lose: they self-clean when an IP or a torrent goes quie
 | Method | Purpose |
 |---|---|
 | `lookup($torrentId, $peerId, $userId)` | Read a peer once: its baseline and where it came from, as a `PeerLookup` |
-| `upsertPeer(..., lookup: $lookup)` | Add or update a peer; returns deltas, the interval and the baseline used |
+| `upsertPeer(..., lookup: $lookup, ipv4: $v4, ipv6: $v6)` | Add or update a peer; returns deltas, the interval and the baseline used |
 | `removePeer($torrentId, $peerId)` | Remove a peer (a `stopped` event); returns the record removed |
 | `find($torrentId, $peerId)` | The stored record, whatever its age or owner |
 | `getPeer($torrentId, $peerId)` | A live peer's record, or null |
@@ -230,6 +238,24 @@ is counting from zero again, so the delta is the reported figure, not zero.
 only**, since two seeders have nothing to exchange, while a leecher gets everyone. Expired
 peers and the requester itself are skipped. The eligible peers are shuffled and then cut
 at `$limit`, so a swarm larger than the limit hands out a different selection each time.
+
+#### One address per family
+
+A dual-stack client announces over IPv4 and IPv6 in turn under one peer ID (libtorrent
+announces once per listen interface). A record with one address would hand the peer out
+only in the family it last used, so each record keeps an `ipv4` and an `ipv6`, each with
+when it was last seen. An announce refreshes the family it arrived over and leaves the
+other alone; a family not seen within `peer_expiry` is dropped as stale. `ip` stays the
+address the last announce came from.
+
+`upsertPeer()` also takes `ipv4` and `ipv6`: addresses the client said it has (BEP 7's
+`ipv4=` and `ipv6=`), which go in their family at once. threepio doesn't decide whether to
+believe them; the tracker vets them first with `PeerAddresses::announced($value, $family,
+$publicOnly)`, which takes an address or an endpoint (`[2001:db8::1]:6881`, port dropped),
+refuses the wrong family, and with `$publicOnly` refuses private and reserved ranges.
+`getPeersForAnnounce()` returns each peer's `ipv4` and `ipv6` for `TrackerResponse` to
+split. Records written before 4.2 have only `ip`, which is read as its own family, so
+nothing needs migrating.
 
 Pass `userId: null` for a peer with no account (hound does); the per-user keys are not
 maintained for it. `userId: 0` is treated as a real user id.

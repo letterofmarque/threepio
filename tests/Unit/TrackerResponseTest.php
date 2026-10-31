@@ -97,6 +97,60 @@ describe('TrackerResponse', function () {
         });
     });
 
+    describe('IPv6 (BEP 7)', function () {
+        $announce = fn (array $peers) => Bencode::decode(TrackerResponse::announce(
+            peers: $peers,
+            complete: 1,
+            incomplete: 1,
+            interval: 1800,
+            minInterval: 300,
+            compact: true,
+        )->getContent());
+
+        it('hands out IPv6 peers in peers6, 18 bytes each (#11112)', function () use ($announce) {
+            $decoded = $announce([
+                ['ip' => '203.0.113.7', 'port' => 6881],
+                ['ip' => '2001:db8::1', 'port' => 51413],
+            ]);
+
+            expect($decoded['peers'])->toBe(inet_pton('203.0.113.7').pack('n', 6881))
+                ->and($decoded['peers6'])->toBe(inet_pton('2001:db8::1').pack('n', 51413));
+        });
+
+        it('puts a dual-stack peer in both lists', function () use ($announce) {
+            $decoded = $announce([
+                ['ip' => '2001:db8::1', 'port' => 6881, 'ipv4' => '203.0.113.7', 'ipv6' => '2001:db8::1'],
+            ]);
+
+            expect(strlen($decoded['peers']))->toBe(6)
+                ->and(strlen($decoded['peers6']))->toBe(18);
+        });
+
+        it('puts an IPv4-mapped address in peers', function () use ($announce) {
+            $decoded = $announce([['ip' => '::ffff:203.0.113.7', 'port' => 6881]]);
+
+            expect($decoded['peers'])->toBe(inet_pton('203.0.113.7').pack('n', 6881))
+                ->and($decoded)->not->toHaveKey('peers6');
+        });
+
+        it('leaves peers6 out when no peer has IPv6, so an IPv4 swarm is answered as before', function () use ($announce) {
+            expect($announce([['ip' => '203.0.113.7', 'port' => 6881]]))->not->toHaveKey('peers6');
+        });
+
+        it('keeps IPv6 peers in the dictionary form', function () {
+            $decoded = Bencode::decode(TrackerResponse::announce(
+                peers: [['ip' => '2001:db8::1', 'port' => 6881, 'peer_id' => '-qB4500-xxxxxxxxxxxx']],
+                complete: 1,
+                incomplete: 0,
+                interval: 1800,
+                minInterval: 300,
+                compact: false,
+            )->getContent());
+
+            expect($decoded['peers'][0]['ip'])->toBe('2001:db8::1');
+        });
+    });
+
     describe('scrape', function () {
         it('creates valid scrape response', function () {
             $files = [

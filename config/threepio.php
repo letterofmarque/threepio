@@ -42,7 +42,8 @@ return [
     |
     | Controls the format of peer lists returned to clients.
     | 'auto' - detect from client request (compact if supported)
-    | 'compact' - always use compact format (6 bytes per peer)
+    | 'compact' - always use compact format (6 bytes per IPv4 peer in `peers`,
+    |             18 per IPv6 peer in `peers6`)
     | 'dictionary' - always use dictionary format (for older clients)
     |
     */

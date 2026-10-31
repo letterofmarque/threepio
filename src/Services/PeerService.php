@@ -8,6 +8,7 @@ use Illuminate\Redis\Connections\Connection;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Redis;
 use Marque\Threepio\Enums\BaselineSource;
+use Marque\Threepio\Support\PeerAddresses;
 use Marque\Threepio\Support\PeerLookup;
 
 /**
@@ -186,6 +187,11 @@ final class PeerService
      * Pass the lookup the caller already made (anti-cheat reads the same one),
      * so the credit is computed against exactly the baseline that was judged
      * and the peer is not read twice.
+     *
+     * $ip is the address the announce came from. $ipv4 and $ipv6 are what the
+     * client said it has (BEP 7), already vetted by the tracker; null when it
+     * said nothing or the tracker doesn't trust what it says. See
+     * PeerAddresses for how the record keeps one address per family.
      */
     public function upsertPeer(
         int $torrentId,
@@ -199,6 +205,8 @@ final class PeerService
         string $userAgent,
         bool $isSeeder,
         ?PeerLookup $lookup = null,
+        ?string $ipv4 = null,
+        ?string $ipv6 = null,
     ): array {
         $redis = $this->redis();
         $peerKey = $this->prefix."peers:{$torrentId}";
@@ -221,6 +229,14 @@ final class PeerService
         $peerData = [
             'user_id' => $userId,
             'ip' => $ip,
+        ] + PeerAddresses::merge(
+            $stored !== null && $this->sameOwner($stored, $userId) ? $stored : null,
+            $ip,
+            $ipv4,
+            $ipv6,
+            $now,
+            $this->peerExpiry,
+        ) + [
             'port' => $port,
             'uploaded' => $uploaded,
             'downloaded' => $downloaded,
@@ -485,7 +501,10 @@ final class PeerService
      * Pass livePeers() when the caller has already read it this announce.
      *
      * @param  array<string, array<string, mixed>>|null  $livePeers
-     * @return array<array{ip: string, port: int, peer_id: string}>
+     *                                                               Each peer comes with its address in each family it can be reached on
+     *                                                               (`ipv4`, `ipv6`), for TrackerResponse to split into `peers` and
+     *                                                               `peers6`; `ip` is the address it last announced from.
+     * @return array<array{ip: string, port: int, peer_id: string, ipv4: ?string, ipv6: ?string}>
      */
     public function getPeersForAnnounce(
         int $torrentId,
@@ -495,6 +514,7 @@ final class PeerService
         ?array $livePeers = null,
     ): array {
         $peers = [];
+        $now = $this->now();
 
         foreach ($livePeers ?? $this->livePeers($torrentId) as $peerId => $peer) {
             // Skip the requesting peer
@@ -511,7 +531,7 @@ final class PeerService
                 'ip' => $peer['ip'],
                 'port' => $peer['port'],
                 'peer_id' => (string) $peerId,
-            ];
+            ] + PeerAddresses::of($peer, $now, $this->peerExpiry);
         }
 
         // Shuffle BEFORE cutting to the limit. Cutting first in hash order and

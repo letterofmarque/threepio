@@ -7,6 +7,33 @@ follows the suite's [VERSIONING.md](../../VERSIONING.md). This changelog starts
 2026-08-26 — earlier releases aren't backfilled; see `git log` or
 [docs/upgrading.md](../../docs/upgrading.md) for the story up to this point.
 
+## [4.2.0] — 2026-11-01
+
+> IPv6 peers are handed out, in `peers6` (BEP 7), and a dual-stack peer keeps an address in each family, so it reaches peers on both.
+
+### Fixed
+
+- **IPv6 peers were never handed out** (#11112). Compact packing used `ip2long()` and
+  skipped every address it couldn't pack, so an IPv6 peer was recorded and given to nobody.
+  Compact responses now carry IPv6 peers in `peers6`, 18 bytes each, beside the IPv4 ones in
+  `peers`. An IPv4-mapped address (`::ffff:a.b.c.d`) goes in `peers`. `peers6` is left out
+  when there are no IPv6 peers, so an IPv4-only response is unchanged.
+- **A dual-stack peer was handed out in one family at a time.** libtorrent announces over
+  IPv4 and IPv6 in turn under one peer ID, and the record kept only the latest address. A
+  peer's record now keeps an `ipv4` and an `ipv6`, each with when it was last seen. An
+  announce refreshes its own family and leaves the other alone, and a family not seen
+  within `peer_expiry` is dropped. Records written before this have only `ip`, which is read
+  as its own family, so nothing needs migrating.
+
+### Added
+
+- **`Support\PeerAddresses`**: `normalise()`, `family()`, `announced()` (vets an `ipv4=` or
+  `ipv6=` value: right family, optionally public only, an endpoint's port dropped),
+  `merge()` and `of()`.
+- **`PeerService::upsertPeer()` takes `ipv4` and `ipv6`**: addresses the client announced,
+  already vetted by the tracker. Both are optional and default to null.
+- **`getPeersForAnnounce()` returns each peer's `ipv4` and `ipv6`.**
+
 ## [4.1.0] — 2026-10-21
 
 > A valid .torrent for your own test suite: `Testing\FakeTorrent`, private by default, with a distinct info_hash each time.

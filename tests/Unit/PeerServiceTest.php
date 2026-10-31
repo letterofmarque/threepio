@@ -343,3 +343,70 @@ describe('a member\'s peers', function () {
         expect($this->peers->peersOfUser(1))->toBe([]);
     });
 });
+
+// #11112: libtorrent announces once per listen interface, so a dual-stack
+// client arrives over IPv4 and then IPv6 under one peer ID. Its record kept
+// only the latest address, so it was handed out in one family at a time.
+test('a dual-stack peer is handed out in both families, whichever it announced over last', function () {
+    $announce = fn (string $peerId, string $ip, bool $seeder) => $this->peers->upsertPeer(
+        torrentId: 1,
+        peerId: $peerId,
+        userId: null,
+        ip: $ip,
+        port: 51413,
+        uploaded: 0,
+        downloaded: 0,
+        left: $seeder ? 0 : 1_000,
+        userAgent: 'test',
+        isSeeder: $seeder,
+    );
+
+    $announce('-qB4210-aaaaaaaaaaaa', '203.0.113.7', true);
+    $announce('-qB4210-aaaaaaaaaaaa', '2001:db8::1', true);
+    $announce('-qB4210-bbbbbbbbbbbb', '198.51.100.9', false);
+
+    $peers = $this->peers->getPeersForAnnounce(1, '-qB4210-bbbbbbbbbbbb', false, 50);
+
+    expect($peers)->toHaveCount(1)
+        ->and($peers[0]['ip'])->toBe('2001:db8::1')
+        ->and($peers[0]['ipv4'])->toBe('203.0.113.7')
+        ->and($peers[0]['ipv6'])->toBe('2001:db8::1');
+});
+
+test('an address the client announced is recorded in its family', function () {
+    $this->peers->upsertPeer(
+        torrentId: 1,
+        peerId: '-qB4210-aaaaaaaaaaaa',
+        userId: 1,
+        ip: '2001:db8::1',
+        port: 51413,
+        uploaded: 0,
+        downloaded: 0,
+        left: 0,
+        userAgent: 'test',
+        isSeeder: true,
+        ipv4: '203.0.113.7',
+    );
+
+    expect($this->peers->find(1, '-qB4210-aaaaaaaaaaaa'))
+        ->toMatchArray(['ip' => '2001:db8::1', 'ipv4' => '203.0.113.7', 'ipv6' => '2001:db8::1']);
+});
+
+test('another member\'s addresses are not carried into a record under the same peer ID', function () {
+    foreach ([[1, '203.0.113.7'], [2, '2001:db8::1']] as [$userId, $ip]) {
+        $this->peers->upsertPeer(
+            torrentId: 1,
+            peerId: '-qB4210-aaaaaaaaaaaa',
+            userId: $userId,
+            ip: $ip,
+            port: 51413,
+            uploaded: 0,
+            downloaded: 0,
+            left: 0,
+            userAgent: 'test',
+            isSeeder: true,
+        );
+    }
+
+    expect($this->peers->find(1, '-qB4210-aaaaaaaaaaaa')['ipv4'])->toBeNull();
+});

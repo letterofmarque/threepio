@@ -14,7 +14,13 @@ final class TrackerResponse
     /**
      * Create a successful announce response.
      *
-     * @param  array<array{ip: string, port: int, peer_id?: string}>  $peers
+     * A peer's `ipv4` and `ipv6` (from PeerService) say where it can be
+     * reached in each family; a peer with only `ip` is reachable there. In
+     * compact form the IPv4 addresses go in `peers` and the IPv6 ones in
+     * `peers6` (BEP 7), so a dual-stack peer is in both. `peers6` is left out
+     * when there are none, so an IPv4-only swarm's response is unchanged.
+     *
+     * @param  array<array{ip: string, port: int, peer_id?: string, ipv4?: ?string, ipv6?: ?string}>  $peers
      */
     public static function announce(
         array $peers,
@@ -32,7 +38,13 @@ final class TrackerResponse
         ];
 
         if ($compact) {
-            $response['peers'] = self::compactPeers($peers);
+            $response['peers'] = self::compactPeers($peers, 4);
+
+            $peers6 = self::compactPeers($peers, 6);
+
+            if ($peers6 !== '') {
+                $response['peers6'] = $peers6;
+            }
         } else {
             $response['peers'] = self::dictionaryPeers($peers);
         }
@@ -90,22 +102,28 @@ final class TrackerResponse
     }
 
     /**
-     * Build compact peer string (6 bytes per peer: 4 for IP, 2 for port).
+     * Build a compact peer string for one family: 6 bytes per IPv4 peer (4
+     * for the address, 2 for the port), 18 per IPv6 peer (16 and 2).
      *
-     * @param  array<array{ip: string, port: int}>  $peers
+     * This used to pack with ip2long() and skip what it couldn't pack, which
+     * was every IPv6 address: IPv6 peers were recorded and never handed to
+     * anyone (#11112).
+     *
+     * @param  array<array{ip: string, port: int, ipv4?: ?string, ipv6?: ?string}>  $peers
      */
-    private static function compactPeers(array $peers): string
+    private static function compactPeers(array $peers, int $family): string
     {
         $compact = '';
 
         foreach ($peers as $peer) {
-            $ip = ip2long($peer['ip']);
+            $address = PeerAddresses::of($peer)["ipv{$family}"];
+            $packed = $address === null ? false : @inet_pton($address);
 
-            if ($ip === false) {
-                continue; // Skip invalid IPs
+            if ($packed === false) {
+                continue;
             }
 
-            $compact .= pack('Nn', $ip, $peer['port']);
+            $compact .= $packed.pack('n', $peer['port']);
         }
 
         return $compact;
