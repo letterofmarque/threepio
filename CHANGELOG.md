@@ -13,8 +13,9 @@ follows the suite's [VERSIONING.md](../../VERSIONING.md). This changelog starts
 
 ### Added
 
-- **`TrackerResponse::announce()` takes `warning`**, sent as BEP 3's `warning message`.
-  Clients treat the announce as a success and show the text.
+- **`TrackerResponse::announce()` takes `warning`**, sent as `warning message` (not a BEP 3
+  key, but one clients have long supported). Clients treat the announce as a success and
+  show the text.
 - **`PeerAddresses::families($config)`** reads accepted address families from a list or a
   comma-separated string (`ipv4`, `ipv6`). Nothing recognisable means both.
 

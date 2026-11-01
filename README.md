@@ -154,8 +154,9 @@ TrackerResponse::scrape($files);
 TrackerResponse::error('Torrent not registered');
 ```
 
-`announce()` takes an optional `warning`, sent as BEP 3's `warning message`: clients treat
-the announce as a success and show the text beside it.
+`announce()` takes an optional `warning`, sent as `warning message`. That key isn't in
+BEP 3; it comes from the original tracker protocol notes, and clients have long supported
+it. They treat the announce as a success and show the text beside it.
 
 **Failures are HTTP 200.** A BitTorrent failure is a bencoded `failure reason` key in the
 body, not a status code — clients expect 200 and will treat a 4xx as a transport problem

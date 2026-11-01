@@ -20,8 +20,9 @@ final class TrackerResponse
      * `peers6` (BEP 7), so a dual-stack peer is in both. `peers6` is left out
      * when there are none, so an IPv4-only swarm's response is unchanged.
      *
-     * A `warning` goes out as BEP 3's `warning message`: clients treat the
-     * announce as a success and show the text.
+     * A `warning` goes out as `warning message`, a key from the original
+     * tracker protocol notes rather than BEP 3, which clients have long
+     * supported: they treat the announce as a success and show the text.
      *
      * @param  array<array{ip: string, port: int, peer_id?: string, ipv4?: ?string, ipv6?: ?string}>  $peers
      */
