@@ -20,6 +20,9 @@ final class TrackerResponse
      * `peers6` (BEP 7), so a dual-stack peer is in both. `peers6` is left out
      * when there are none, so an IPv4-only swarm's response is unchanged.
      *
+     * A `warning` goes out as BEP 3's `warning message`: clients treat the
+     * announce as a success and show the text.
+     *
      * @param  array<array{ip: string, port: int, peer_id?: string, ipv4?: ?string, ipv6?: ?string}>  $peers
      */
     public static function announce(
@@ -29,6 +32,7 @@ final class TrackerResponse
         int $interval,
         int $minInterval,
         bool $compact = true,
+        ?string $warning = null,
     ): Response {
         $response = [
             'interval' => $interval,
@@ -36,6 +40,10 @@ final class TrackerResponse
             'complete' => $complete,
             'incomplete' => $incomplete,
         ];
+
+        if ($warning !== null) {
+            $response['warning message'] = $warning;
+        }
 
         if ($compact) {
             $response['peers'] = self::compactPeers($peers, 4);

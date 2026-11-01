@@ -154,6 +154,9 @@ TrackerResponse::scrape($files);
 TrackerResponse::error('Torrent not registered');
 ```
 
+`announce()` takes an optional `warning`, sent as BEP 3's `warning message`: clients treat
+the announce as a success and show the text beside it.
+
 **Failures are HTTP 200.** A BitTorrent failure is a bencoded `failure reason` key in the
 body, not a status code — clients expect 200 and will treat a 4xx as a transport problem
 rather than showing your message. That's protocol convention, not an oversight.
@@ -260,6 +263,10 @@ address, and one peer ID can announce from two places, so nothing here says a pe
 addresses are one machine. `PeerAddresses::of()` gives every address the peer can be
 reached at. A tracker judging location should read the record's `ip`, the address its
 last announce came from (bloodhound does).
+
+`PeerAddresses::families($config)` reads a tracker's accepted families from config, as a
+list or a comma-separated string (`ipv4`, `ipv6`, or both). Nothing recognisable means
+both, so a typo can't turn every client away.
 
 threepio doesn't decide whether to believe the announced addresses; the tracker vets them first with `PeerAddresses::announced($value, $family,
 $publicOnly)`, which takes an address or an endpoint (`[2001:db8::1]:6881`, port dropped),

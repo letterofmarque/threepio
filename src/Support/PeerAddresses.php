@@ -38,6 +38,36 @@ final class PeerAddresses
     }
 
     /**
+     * The address families a tracker accepts announces over, from its config:
+     * a list or a comma-separated string of `ipv4` / `ipv6` (`4` / `6` work
+     * too). Nothing recognisable means both, so a typo can't shut every
+     * client out.
+     *
+     * @return list<int>
+     */
+    public static function families(mixed $config): array
+    {
+        $names = is_array($config) ? $config : explode(',', (string) $config);
+        $families = [];
+
+        foreach ($names as $name) {
+            $family = match (strtolower(trim((string) $name))) {
+                'ipv4', '4' => 4,
+                'ipv6', '6' => 6,
+                default => null,
+            };
+
+            if ($family !== null && ! in_array($family, $families, true)) {
+                $families[] = $family;
+            }
+        }
+
+        sort($families);
+
+        return $families === [] ? [4, 6] : $families;
+    }
+
+    /**
      * 4, 6, or null for something that is not an address.
      */
     public static function family(string $ip): ?int

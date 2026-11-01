@@ -17,6 +17,21 @@ describe('normalise', function () {
     });
 });
 
+describe('families', function () {
+    it('reads a list or a comma-separated string', function () {
+        expect(PeerAddresses::families('ipv4'))->toBe([4])
+            ->and(PeerAddresses::families('ipv6, ipv4'))->toBe([4, 6])
+            ->and(PeerAddresses::families(['IPv6']))->toBe([6])
+            ->and(PeerAddresses::families('4'))->toBe([4]);
+    });
+
+    it('takes nothing recognisable as both, so a typo shuts nobody out', function () {
+        expect(PeerAddresses::families(''))->toBe([4, 6])
+            ->and(PeerAddresses::families('ipv5'))->toBe([4, 6])
+            ->and(PeerAddresses::families(null))->toBe([4, 6]);
+    });
+});
+
 describe('announced', function () {
     it('takes an address of the family asked for', function () {
         expect(PeerAddresses::announced('203.0.113.7', 4, true))->toBe('203.0.113.7')

@@ -7,6 +7,17 @@ follows the suite's [VERSIONING.md](../../VERSIONING.md). This changelog starts
 2026-08-26 — earlier releases aren't backfilled; see `git log` or
 [docs/upgrading.md](../../docs/upgrading.md) for the story up to this point.
 
+## [Unreleased]
+
+> A tracker can tell a client something without failing its announce (`warning message`), and read which address families it accepts from config.
+
+### Added
+
+- **`TrackerResponse::announce()` takes `warning`**, sent as BEP 3's `warning message`.
+  Clients treat the announce as a success and show the text.
+- **`PeerAddresses::families($config)`** reads accepted address families from a list or a
+  comma-separated string (`ipv4`, `ipv6`). Nothing recognisable means both.
+
 ## [4.2.0] — 2026-11-01
 
 > IPv6 peers are handed out, in `peers6` (BEP 7), and a dual-stack peer keeps an address in each family, so compact responses carry it in both.

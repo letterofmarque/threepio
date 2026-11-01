@@ -151,6 +151,27 @@ describe('TrackerResponse', function () {
         });
     });
 
+    describe('warning message', function () {
+        it('carries a warning as BEP 3\'s warning message, beside an ordinary response', function () {
+            $decoded = Bencode::decode(TrackerResponse::announce(
+                peers: [],
+                complete: 2,
+                incomplete: 1,
+                interval: 1800,
+                minInterval: 300,
+                warning: 'This tracker accepts IPv4 announces only',
+            )->getContent());
+
+            expect($decoded['warning message'])->toBe('This tracker accepts IPv4 announces only')
+                ->and($decoded['complete'])->toBe(2)
+                ->and($decoded)->not->toHaveKey('failure reason');
+        });
+
+        it('leaves it out when there is none', function () {
+            expect(Bencode::decode(TrackerResponse::announce([], 0, 0, 1800, 300)->getContent()))->not->toHaveKey('warning message');
+        });
+    });
+
     describe('scrape', function () {
         it('creates valid scrape response', function () {
             $files = [
